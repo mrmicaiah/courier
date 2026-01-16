@@ -1,7 +1,7 @@
 {
-  "name": "email-bot-server",
+  "name": "courier-api",
   "version": "1.0.0",
-  "description": "Courier - Email marketing platform for Untitled Publishers",
+  "description": "Courier - Email marketing platform",
   "main": "index.js",
   "scripts": {
     "deploy": "wrangler deploy",
