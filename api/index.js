@@ -14,6 +14,7 @@ import { handleGetEmails, handleCreateEmail, handleGetEmail, handleUpdateEmail, 
 import { handleGetTemplates, handleCreateTemplate, handleGetTemplate, handleUpdateTemplate, handleDeleteTemplate, handleDuplicateTemplate } from './handlers-templates.js';
 import { handleSubscribe, handleLeadCapture, handleGetLeads, handleExportLeads, handleStats } from './handlers-legacy.js';
 import { processSequenceEmails, processScheduledCampaigns, handleProcessSequences } from './cron.js';
+import { handleMCP } from './mcp.js';
 
 // Meet the Contractors config
 const MTC_PASSWORD = 'contractors2026';
@@ -26,6 +27,11 @@ export default {
     }
 
     const url = new URL(request.url);
+    
+    // === MCP SERVER ENDPOINT ===
+    if (url.pathname === '/sse' || url.pathname === '/mcp') {
+      return handleMCP(request, env);
+    }
     
     // Debug endpoint
     if (url.pathname === '/debug') {
