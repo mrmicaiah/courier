@@ -1,8 +1,6 @@
 /**
- * Untitled Publishers Email Platform
+ * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + AWS SES
- * 
- * Refactored modular architecture
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
@@ -16,7 +14,6 @@ import { handleGetEmails, handleCreateEmail, handleGetEmail, handleUpdateEmail, 
 import { handleGetTemplates, handleCreateTemplate, handleGetTemplate, handleUpdateTemplate, handleDeleteTemplate, handleDuplicateTemplate } from './handlers-templates.js';
 import { handleSubscribe, handleLeadCapture, handleGetLeads, handleExportLeads, handleStats } from './handlers-legacy.js';
 import { processSequenceEmails, processScheduledCampaigns, handleProcessSequences } from './cron.js';
-import { handleGetPublicPosts, handleGetPublicPost, handleGetPublicCategories, handleGetRSSFeed, handleGetPosts, handleGetPost, handleCreatePost, handleUpdatePost, handleDeletePost, handlePublishPost, handleSchedulePost, handleUnpublishPost, processScheduledPosts } from './handlers-blog.js';
 
 // Meet the Contractors config
 const MTC_PASSWORD = 'contractors2026';
@@ -65,24 +62,6 @@ export default {
     }
     if (url.pathname === '/unsubscribe') {
       return handlePublicUnsubscribe(request, env);
-    }
-
-    // === PUBLIC BLOG ENDPOINTS ===
-    if (url.pathname === '/api/blog/posts' && request.method === 'GET') {
-      return handleGetPublicPosts(request, env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/posts\/[a-zA-Z0-9-]+$/) && request.method === 'GET') {
-      const slug = url.pathname.split('/').pop();
-      if (slug.match(/^[a-f0-9-]{36}$/)) {
-      } else {
-        return handleGetPublicPost(slug, request, env);
-      }
-    }
-    if (url.pathname === '/api/blog/categories' && request.method === 'GET') {
-      return handleGetPublicCategories(request, env);
-    }
-    if (url.pathname === '/api/blog/feed' && request.method === 'GET') {
-      return handleGetRSSFeed(request, env);
     }
 
     // === MEET THE CONTRACTORS DASHBOARD ===
@@ -369,38 +348,11 @@ export default {
       return handleEmailStats(url.pathname.split('/')[3], env);
     }
 
-    // === BLOG (Admin) ===
-    if (url.pathname === '/api/blog/admin/posts' && request.method === 'GET') {
-      return handleGetPosts(request, env);
-    }
-    if (url.pathname === '/api/blog/admin/posts' && request.method === 'POST') {
-      return handleCreatePost(request, env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+$/) && request.method === 'GET') {
-      return handleGetPost(url.pathname.split('/').pop(), env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+$/) && request.method === 'PUT') {
-      return handleUpdatePost(url.pathname.split('/').pop(), request, env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+$/) && request.method === 'DELETE') {
-      return handleDeletePost(url.pathname.split('/').pop(), env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+\/publish$/) && request.method === 'POST') {
-      return handlePublishPost(url.pathname.split('/')[5], env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+\/schedule$/) && request.method === 'POST') {
-      return handleSchedulePost(url.pathname.split('/')[5], request, env);
-    }
-    if (url.pathname.match(/^\/api\/blog\/admin\/posts\/[a-zA-Z0-9-]+\/unpublish$/) && request.method === 'POST') {
-      return handleUnpublishPost(url.pathname.split('/')[5], env);
-    }
-
     return jsonResponse({ error: 'Not found' }, 404);
   },
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil(processSequenceEmails(env));
     ctx.waitUntil(processScheduledCampaigns(env));
-    ctx.waitUntil(processScheduledPosts(env));
   }
 };
