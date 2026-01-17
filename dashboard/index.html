@@ -11,18 +11,14 @@
     
     /* Login */
     .login-container { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--blue-100) 0%, var(--gray-200) 100%); padding: 20px; }
-    .login-box { background: var(--white); border: 2px solid var(--gray-400); border-radius: 16px; padding: 48px 40px; width: 100%; max-width: 400px; box-shadow: var(--shadow-md); }
+    .login-box { background: var(--white); border: 2px solid var(--gray-400); border-radius: 16px; padding: 48px 40px; width: 100%; max-width: 400px; text-align: center; box-shadow: var(--shadow-md); }
     .login-logo { width: 60px; height: 60px; background: var(--blue-600); border-radius: 14px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 1.6rem; border: 2px solid var(--blue-700); }
-    .login-box h1 { font-size: 1.75rem; font-weight: 700; text-align: center; margin-bottom: 4px; }
-    .login-box .subtitle { color: var(--gray-600); text-align: center; margin-bottom: 32px; }
-    .login-form .form-group { margin-bottom: 20px; }
-    .login-form label { display: block; margin-bottom: 8px; font-size: 0.875rem; font-weight: 600; color: var(--gray-700); }
-    .login-form input { width: 100%; padding: 14px 16px; border: 2px solid var(--gray-400); border-radius: 10px; font-size: 1rem; font-family: inherit; }
-    .login-form input:focus { outline: none; border-color: var(--blue-500); box-shadow: 0 0 0 3px var(--blue-100); }
-    .login-form .btn-login { width: 100%; padding: 14px; background: var(--blue-600); border: 2px solid var(--blue-700); color: white; font-size: 1rem; font-weight: 600; border-radius: 10px; cursor: pointer; font-family: inherit; }
-    .login-form .btn-login:hover { background: var(--blue-700); }
-    .login-form .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
-    .error-msg { color: var(--red-600); font-size: 0.875rem; font-weight: 500; margin-top: 16px; text-align: center; display: none; }
+    .login-box h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 4px; }
+    .login-box .subtitle { color: var(--gray-600); margin-bottom: 32px; }
+    .pin-input { display: flex; gap: 12px; justify-content: center; margin-bottom: 8px; }
+    .pin-input input { width: 56px; height: 64px; text-align: center; font-size: 1.5rem; font-weight: 600; border: 2px solid var(--gray-400); border-radius: 10px; font-family: inherit; }
+    .pin-input input:focus { outline: none; border-color: var(--blue-500); box-shadow: 0 0 0 3px var(--blue-100); }
+    .error-msg { color: var(--red-600); font-size: 0.875rem; font-weight: 500; margin-top: 16px; display: none; }
     
     /* Nav */
     .nav-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #1e293b; border-bottom: 1px solid #334155; position: sticky; top: 0; z-index: 100; }
@@ -112,14 +108,13 @@
       <div class="login-logo">📧</div>
       <h1>Courier</h1>
       <p class="subtitle">Email Marketing Platform</p>
-      <form class="login-form" id="loginForm">
-        <div class="form-group">
-          <label for="password">Password</label>
-          <input type="password" id="password" placeholder="Enter your API key" autofocus required>
-        </div>
-        <button type="submit" class="btn-login" id="loginBtn">Sign In</button>
-      </form>
-      <p class="error-msg" id="loginError">Invalid password. Please try again.</p>
+      <div class="pin-input">
+        <input type="password" inputmode="numeric" maxlength="1" data-pin="0" autofocus>
+        <input type="password" inputmode="numeric" maxlength="1" data-pin="1">
+        <input type="password" inputmode="numeric" maxlength="1" data-pin="2">
+        <input type="password" inputmode="numeric" maxlength="1" data-pin="3">
+      </div>
+      <p class="error-msg" id="pinError">Invalid PIN</p>
     </div>
   </div>
 
@@ -261,39 +256,71 @@
       showApp();
     }
 
-    // Login form
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const password = document.getElementById('password').value;
-      const btn = document.getElementById('loginBtn');
-      const error = document.getElementById('loginError');
+    // PIN input handling
+    const pinInputs = document.querySelectorAll('.pin-input input');
+    
+    pinInputs.forEach((input, index) => {
+      input.addEventListener('input', (e) => {
+        const val = e.target.value;
+        if (val.length === 1 && index < pinInputs.length - 1) {
+          pinInputs[index + 1].focus();
+        }
+        checkPin();
+      });
       
-      btn.disabled = true;
-      btn.textContent = 'Signing in...';
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace' && !e.target.value && index > 0) {
+          pinInputs[index - 1].focus();
+        }
+      });
+      
+      // Handle paste
+      input.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const paste = (e.clipboardData || window.clipboardData).getData('text');
+        const digits = paste.replace(/\D/g, '').slice(0, 4);
+        digits.split('').forEach((digit, i) => {
+          if (pinInputs[i]) pinInputs[i].value = digit;
+        });
+        if (digits.length > 0) {
+          pinInputs[Math.min(digits.length, 3)].focus();
+        }
+        checkPin();
+      });
+    });
+
+    async function checkPin() {
+      const pin = Array.from(pinInputs).map(i => i.value).join('');
+      if (pin.length !== 4) return;
+      
+      const error = document.getElementById('pinError');
       error.style.display = 'none';
       
       try {
-        const res = await fetch(API_BASE + '/api/stats', {
-          headers: { 'Authorization': 'Bearer ' + password }
+        const res = await fetch(API_BASE + '/api/dashboard/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
         });
         
-        if (res.ok) {
-          API_KEY = password;
-          sessionStorage.setItem('courier_key', password);
+        const data = await res.json();
+        
+        if (res.ok && data.token) {
+          API_KEY = data.token;
+          sessionStorage.setItem('courier_key', data.token);
           showApp();
         } else {
           error.style.display = 'block';
-          document.getElementById('password').value = '';
-          document.getElementById('password').focus();
+          pinInputs.forEach(i => i.value = '');
+          pinInputs[0].focus();
         }
       } catch (err) {
-        error.textContent = 'Connection error. Please try again.';
+        error.textContent = 'Connection error';
         error.style.display = 'block';
+        pinInputs.forEach(i => i.value = '');
+        pinInputs[0].focus();
       }
-      
-      btn.disabled = false;
-      btn.textContent = 'Sign In';
-    });
+    }
 
     function showApp() {
       document.getElementById('loginScreen').style.display = 'none';
@@ -306,8 +333,8 @@
       API_KEY = '';
       document.getElementById('app').classList.remove('active');
       document.getElementById('loginScreen').style.display = 'flex';
-      document.getElementById('password').value = '';
-      document.getElementById('password').focus();
+      pinInputs.forEach(i => i.value = '');
+      pinInputs[0].focus();
     }
 
     // API helper
