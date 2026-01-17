@@ -150,35 +150,71 @@ export async function handleDeleteSubscribers(request, env) {
     }
     
     let deleted = 0;
+    const now = new Date().toISOString();
     
     if (subscription_ids?.length) {
       for (const subId of subscription_ids) {
-        await env.DB.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?').bind(subId).run();
+        // Check if this is a subscription ID or lead ID
+        let sub = await env.DB.prepare('SELECT * FROM subscriptions WHERE id = ?').bind(subId).first();
         
-        if (permanent) {
-          await env.DB.prepare('DELETE FROM subscriptions WHERE id = ?').bind(subId).run();
+        if (sub) {
+          // It's a subscription ID
+          await env.DB.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?').bind(subId).run();
+          
+          if (permanent) {
+            await env.DB.prepare('DELETE FROM subscriptions WHERE id = ?').bind(subId).run();
+          } else {
+            await env.DB.prepare(`
+              UPDATE subscriptions SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?
+            `).bind(now, subId).run();
+          }
+          deleted++;
         } else {
-          await env.DB.prepare(`
-            UPDATE subscriptions SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?
-          `).bind(new Date().toISOString(), subId).run();
+          // Maybe it's a lead ID - check and delete all their subscriptions
+          const lead = await env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(subId).first();
+          if (lead) {
+            const subs = await env.DB.prepare('SELECT id FROM subscriptions WHERE lead_id = ?').bind(subId).all();
+            for (const s of subs.results || []) {
+              await env.DB.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?').bind(s.id).run();
+              if (permanent) {
+                await env.DB.prepare('DELETE FROM subscriptions WHERE id = ?').bind(s.id).run();
+              } else {
+                await env.DB.prepare(`
+                  UPDATE subscriptions SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?
+                `).bind(now, s.id).run();
+              }
+            }
+            
+            if (permanent) {
+              await env.DB.prepare('DELETE FROM email_sends WHERE lead_id = ?').bind(subId).run();
+              await env.DB.prepare('DELETE FROM touches WHERE lead_id = ?').bind(subId).run();
+              await env.DB.prepare('DELETE FROM leads WHERE id = ?').bind(subId).run();
+            }
+            deleted++;
+          }
         }
-        deleted++;
       }
     }
     
-    if (lead_ids?.length && permanent) {
+    if (lead_ids?.length) {
       for (const leadId of lead_ids) {
-        await env.DB.prepare(`
-          DELETE FROM sequence_enrollments WHERE subscription_id IN (
-            SELECT id FROM subscriptions WHERE lead_id = ?
-          )
-        `).bind(leadId).run();
+        const subs = await env.DB.prepare('SELECT id FROM subscriptions WHERE lead_id = ?').bind(leadId).all();
+        for (const s of subs.results || []) {
+          await env.DB.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?').bind(s.id).run();
+          if (permanent) {
+            await env.DB.prepare('DELETE FROM subscriptions WHERE id = ?').bind(s.id).run();
+          } else {
+            await env.DB.prepare(`
+              UPDATE subscriptions SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?
+            `).bind(now, s.id).run();
+          }
+        }
         
-        await env.DB.prepare('DELETE FROM email_sends WHERE lead_id = ?').bind(leadId).run();
-        await env.DB.prepare('DELETE FROM subscriptions WHERE lead_id = ?').bind(leadId).run();
-        await env.DB.prepare('DELETE FROM touches WHERE lead_id = ?').bind(leadId).run();
-        await env.DB.prepare('DELETE FROM leads WHERE id = ?').bind(leadId).run();
-        
+        if (permanent) {
+          await env.DB.prepare('DELETE FROM email_sends WHERE lead_id = ?').bind(leadId).run();
+          await env.DB.prepare('DELETE FROM touches WHERE lead_id = ?').bind(leadId).run();
+          await env.DB.prepare('DELETE FROM leads WHERE id = ?').bind(leadId).run();
+        }
         deleted++;
       }
     }
@@ -346,15 +382,24 @@ export async function handleGetSubscribers(request, env) {
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
   const offset = Math.max(parseInt(url.searchParams.get('offset') || '0'), 0);
 
-  let query = 'SELECT id, email, name, segment, source, created_at, unsubscribed_at, bounce_count FROM leads WHERE 1=1';
+  // Join with subscriptions to get subscription info and list names
+  let query = `
+    SELECT DISTINCT l.id as lead_id, l.email, l.name, l.segment, l.source, l.created_at, 
+           l.unsubscribed_at, l.bounce_count,
+           s.id as subscription_id, s.list_id, lst.name as list_name
+    FROM leads l
+    LEFT JOIN subscriptions s ON l.id = s.lead_id AND s.status = 'active'
+    LEFT JOIN lists lst ON s.list_id = lst.id
+    WHERE 1=1
+  `;
   const params = [];
 
-  if (segment) { query += ' AND segment = ?'; params.push(segment); }
-  if (status === 'active') { query += ' AND unsubscribed_at IS NULL AND (bounce_count IS NULL OR bounce_count < 3)'; }
-  if (status === 'unsubscribed') { query += ' AND unsubscribed_at IS NOT NULL'; }
-  if (search) { query += ' AND (email LIKE ? OR name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+  if (segment) { query += ' AND l.segment = ?'; params.push(segment); }
+  if (status === 'active') { query += ' AND l.unsubscribed_at IS NULL AND (l.bounce_count IS NULL OR l.bounce_count < 3)'; }
+  if (status === 'unsubscribed') { query += ' AND l.unsubscribed_at IS NOT NULL'; }
+  if (search) { query += ' AND (l.email LIKE ? OR l.name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
 
-  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  query += ' ORDER BY l.created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
 
   const results = await env.DB.prepare(query).bind(...params).all();
