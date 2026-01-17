@@ -1248,7 +1248,7 @@ async function executeTool(name, args, env) {
 export async function handleMCP(request, env) {
   const url = new URL(request.url);
   
-  // Debug endpoint - test MCP without SSE
+  // Debug endpoints
   if (url.searchParams.get('debug') === 'init') {
     return new Response(JSON.stringify({
       jsonrpc: '2.0',
@@ -1259,10 +1259,7 @@ export async function handleMCP(request, env) {
         capabilities: { tools: {} }
       }
     }), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      }
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   }
   
@@ -1272,46 +1269,19 @@ export async function handleMCP(request, env) {
       id: 1,
       result: { tools: TOOLS }
     }), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      }
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   }
   
-  // SSE endpoint for MCP
+  // SSE endpoint - simple version that sends endpoint and closes
   if (request.method === 'GET') {
-    const encoder = new TextEncoder();
     const messageEndpoint = `${url.origin}/sse`;
+    const sseMessage = `data: ${JSON.stringify({ jsonrpc: '2.0', method: 'endpoint', params: { url: messageEndpoint } })}\n\n`;
     
-    let intervalId;
-    
-    const stream = new ReadableStream({
-      start(controller) {
-        // Send the endpoint message immediately
-        const endpointMessage = `event: endpoint\ndata: ${JSON.stringify({ url: messageEndpoint })}\n\n`;
-        controller.enqueue(encoder.encode(endpointMessage));
-        
-        // Send keepalive pings every 15 seconds to keep connection open
-        intervalId = setInterval(() => {
-          try {
-            controller.enqueue(encoder.encode(': keepalive\n\n'));
-          } catch (e) {
-            // Stream closed
-            clearInterval(intervalId);
-          }
-        }, 15000);
-      },
-      cancel() {
-        if (intervalId) clearInterval(intervalId);
-      }
-    });
-    
-    return new Response(stream, {
+    return new Response(sseMessage, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
@@ -1353,18 +1323,12 @@ export async function handleMCP(request, env) {
             id,
             error: { code: -32601, message: `Method not found: ${method}` }
           }), {
-            headers: {
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-            }
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
       }
       
       return new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), {
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        }
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       });
       
     } catch (error) {
@@ -1373,10 +1337,7 @@ export async function handleMCP(request, env) {
         error: { code: -32603, message: error.message }
       }), {
         status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        }
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       });
     }
   }
