@@ -2,7 +2,7 @@
  * Legacy handlers - backward compatible endpoints
  */
 
-import { generateId, jsonResponse, isValidEmail, isDisposableEmail, sanitizeString, sendEmailViaSES } from './lib.js';
+import { generateId, generateSlug, jsonResponse, isValidEmail, isDisposableEmail, sanitizeString, sendEmailViaSES } from './lib.js';
 import { enrollInSequence } from './handlers-sequences.js';
 
 async function sendLeadNotification(env, list, lead, subscription) {
@@ -95,11 +95,26 @@ export async function handleSubscribe(request, env) {
       return jsonResponse({ error: 'Please use a valid email address' }, 400, request);
     }
     
-    const list = await env.DB.prepare('SELECT * FROM lists WHERE slug = ? AND status = ?')
+    // Try to find existing list
+    let list = await env.DB.prepare('SELECT * FROM lists WHERE slug = ? AND status = ?')
       .bind(listSlug, 'active').first();
     
+    // Auto-create list if it doesn't exist
     if (!list) {
-      return jsonResponse({ error: 'List not found' }, 404, request);
+      const now = new Date().toISOString();
+      const listId = generateId();
+      const listName = listSlug
+        .split('-')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+      
+      await env.DB.prepare(`
+        INSERT INTO lists (id, name, slug, status, created_at, updated_at)
+        VALUES (?, ?, ?, 'active', ?, ?)
+      `).bind(listId, listName, listSlug, now, now).run();
+      
+      list = await env.DB.prepare('SELECT * FROM lists WHERE id = ?').bind(listId).first();
+      console.log(`Auto-created list: ${listName} (${listSlug})`);
     }
     
     const now = new Date().toISOString();

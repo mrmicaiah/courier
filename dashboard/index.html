@@ -82,6 +82,7 @@
     .checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: var(--blue-600); }
     .clickable { cursor: pointer; color: var(--blue-600); }
     .clickable:hover { text-decoration: underline; }
+    .tag { display: inline-block; padding: 2px 8px; background: var(--blue-100); color: var(--blue-700); border-radius: 4px; font-size: 0.75rem; margin-right: 4px; margin-bottom: 2px; }
     
     /* Modal */
     .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
@@ -197,11 +198,12 @@
                   <th>Email</th>
                   <th>Name</th>
                   <th>List</th>
+                  <th>Tags</th>
                   <th>Source</th>
                   <th>Created</th>
                 </tr>
               </thead>
-              <tbody id="subscribersTable"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
+              <tbody id="subscribersTable"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -493,7 +495,7 @@
       currentSubscribers = data.subscribers || [];
       
       if (!currentSubscribers.length) {
-        document.getElementById('subscribersTable').innerHTML = '<tr><td colspan="6" class="empty-state">No subscribers</td></tr>';
+        document.getElementById('subscribersTable').innerHTML = '<tr><td colspan="7" class="empty-state">No subscribers</td></tr>';
         return;
       }
       
@@ -505,12 +507,27 @@
         // Use subscription_id if available, otherwise fall back to lead_id
         const subId = sub.subscription_id || sub.lead_id;
         const listName = sub.list_name || listMap[sub.list_id] || '-';
+        
+        // Parse tags
+        let tagsHtml = '-';
+        if (sub.tags) {
+          try {
+            const tags = typeof sub.tags === 'string' ? JSON.parse(sub.tags) : sub.tags;
+            if (Array.isArray(tags) && tags.length > 0) {
+              tagsHtml = tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+            }
+          } catch (e) {
+            tagsHtml = '-';
+          }
+        }
+        
         return `
           <tr data-id="${subId}" class="${selectedSubscribers.has(String(subId)) ? 'selected' : ''}">
             <td><input type="checkbox" class="checkbox sub-check" data-id="${subId}" onchange="toggleSubscriber('${subId}')" ${selectedSubscribers.has(String(subId)) ? 'checked' : ''}></td>
             <td>${escapeHtml(sub.email)}</td>
             <td>${escapeHtml(sub.name || '-')}</td>
             <td>${escapeHtml(listName)}</td>
+            <td>${tagsHtml}</td>
             <td>${escapeHtml(sub.source || '-')}</td>
             <td>${formatDate(sub.created_at || sub.subscribed_at)}</td>
           </tr>
