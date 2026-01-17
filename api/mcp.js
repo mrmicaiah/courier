@@ -808,24 +808,36 @@ async function executeTool(name, args, env) {
       const e = await db.prepare('SELECT * FROM emails WHERE id = ?').bind(args.campaign_id).first();
       if (!e) return "⛔ Campaign not found";
       
-      const stats = await db.prepare(`
-        SELECT 
-          COUNT(*) as sent,
-          SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
-          SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
-          SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounced
-        FROM email_sends WHERE email_id = ?
-      `).bind(args.campaign_id).first();
+      let stats = { sent: 0, opened: 0, clicked: 0, bounced: 0 };
+      try {
+        const result = await db.prepare(`
+          SELECT 
+            COUNT(*) as sent,
+            SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
+            SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+            SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounced
+          FROM email_sends WHERE email_id = ?
+        `).bind(args.campaign_id).first();
+        if (result) stats = result;
+      } catch (err) {
+        // Table might not exist
+      }
       
-      const topLinks = await db.prepare(`
-        SELECT ec.url, COUNT(*) as clicks 
-        FROM email_clicks ec 
-        JOIN email_sends es ON ec.send_id = es.id 
-        WHERE es.email_id = ? 
-        GROUP BY ec.url 
-        ORDER BY clicks DESC 
-        LIMIT 5
-      `).bind(args.campaign_id).all();
+      let topLinks = [];
+      try {
+        const result = await db.prepare(`
+          SELECT ec.url, COUNT(*) as clicks 
+          FROM email_clicks ec 
+          JOIN email_sends es ON ec.send_id = es.id 
+          WHERE es.email_id = ? 
+          GROUP BY ec.url 
+          ORDER BY clicks DESC 
+          LIMIT 5
+        `).bind(args.campaign_id).all();
+        topLinks = result.results || [];
+      } catch (err) {
+        // Table might not exist
+      }
       
       const sent = stats?.sent || 0;
       const opened = stats?.opened || 0;
@@ -843,9 +855,9 @@ async function executeTool(name, args, env) {
       out += `• Clicked: ${clicked} (${sent ? Math.round(clicked/sent*100) : 0}%)\n`;
       out += `• Click-to-Open: ${opened ? Math.round(clicked/opened*100) : 0}%\n`;
       
-      if (topLinks.results?.length > 0) {
+      if (topLinks.length > 0) {
         out += `\n**Top Clicked Links:**\n`;
-        for (const link of topLinks.results) {
+        for (const link of topLinks) {
           const shortUrl = link.url.length > 50 ? link.url.slice(0, 47) + '...' : link.url;
           out += `• ${shortUrl} (${link.clicks})\n`;
         }
@@ -1082,19 +1094,30 @@ async function executeTool(name, args, env) {
       const lead = await db.prepare('SELECT * FROM leads WHERE email = ?').bind(args.email).first();
       if (!lead) return "⛔ Email not found in leads";
       
+      // Get subscription for this lead and the sequence's list
+      const seq = await db.prepare('SELECT list_id FROM sequences WHERE id = ?').bind(args.sequence_id).first();
+      if (!seq) return "⛔ Sequence not found";
+      
+      const sub = await db.prepare('SELECT id FROM subscriptions WHERE lead_id = ? AND list_id = ?').bind(lead.id, seq.list_id).first();
+      if (!sub) return "⛔ Lead is not subscribed to this sequence's list";
+      
       const id = generateId();
       const now = new Date().toISOString();
       
       await db.prepare(`
-        INSERT INTO sequence_enrollments (id, sequence_id, lead_id, current_step, status, enrolled_at, created_at)
+        INSERT INTO sequence_enrollments (id, subscription_id, sequence_id, current_step, status, enrolled_at, created_at)
         VALUES (?, ?, ?, 1, 'active', ?, ?)
-      `).bind(id, args.sequence_id, lead.id, now, now).run();
+      `).bind(id, sub.id, args.sequence_id, now, now).run();
       
       return `✅ Enrolled **${args.email}** in sequence\nEnrollment ID: ${id}`;
     }
     
     case "courier_sequence_enrollments": {
-      let query = `SELECT se.*, l.email, l.name FROM sequence_enrollments se JOIN leads l ON se.lead_id = l.id WHERE se.sequence_id = ?`;
+      let query = `SELECT se.*, l.email, l.name 
+        FROM sequence_enrollments se 
+        JOIN subscriptions s ON se.subscription_id = s.id
+        JOIN leads l ON s.lead_id = l.id 
+        WHERE se.sequence_id = ?`;
       const params = [args.sequence_id];
       
       if (args.status) {
@@ -1165,42 +1188,89 @@ async function executeTool(name, args, env) {
     
     // ==================== STATS ====================
     case "courier_stats": {
-      const totalLeads = await db.prepare('SELECT COUNT(*) as c FROM leads').first();
-      const todayLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE date(created_at) = date('now')").first();
-      const weekLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-7 days')").first();
-      const monthLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-30 days')").first();
-      const activeSubs = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'active'").first();
-      const unsubscribed = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'unsubscribed'").first();
+      // Build stats with try/catch for each query to handle missing tables gracefully
+      let totalLeads = 0, todayLeads = 0, weekLeads = 0, monthLeads = 0;
+      let activeSubs = 0, unsubscribed = 0;
+      let emailStats = { total_sends: 0, opens: 0, clicks: 0, bounces: 0 };
+      let campaigns = { total: 0, drafts: 0, scheduled: 0, sent: 0 };
+      let sequences = { total: 0, active: 0, drafts: 0 };
+      let activeEnrollments = 0, lists = 0;
       
-      const emailStats = await db.prepare(`
-        SELECT 
-          COUNT(*) as total_sends,
-          SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opens,
-          SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicks,
-          SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounces
-        FROM email_sends 
-        WHERE created_at > datetime('now', '-30 days')
-      `).first();
+      try {
+        const r = await db.prepare('SELECT COUNT(*) as c FROM leads').first();
+        totalLeads = r?.c || 0;
+      } catch (e) {}
       
-      const campaigns = await db.prepare(`
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts,
-          SUM(CASE WHEN status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
-          SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent
-        FROM emails
-      `).first();
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE date(created_at) = date('now')").first();
+        todayLeads = r?.c || 0;
+      } catch (e) {}
       
-      const sequences = await db.prepare(`
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
-          SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts
-        FROM sequences
-      `).first();
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-7 days')").first();
+        weekLeads = r?.c || 0;
+      } catch (e) {}
       
-      const activeEnrollments = await db.prepare("SELECT COUNT(*) as c FROM sequence_enrollments WHERE status = 'active'").first();
-      const lists = await db.prepare("SELECT COUNT(*) as c FROM lists WHERE status != 'archived'").first();
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-30 days')").first();
+        monthLeads = r?.c || 0;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'active'").first();
+        activeSubs = r?.c || 0;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'unsubscribed'").first();
+        unsubscribed = r?.c || 0;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare(`
+          SELECT 
+            COUNT(*) as total_sends,
+            SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opens,
+            SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicks,
+            SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounces
+          FROM email_sends 
+          WHERE created_at > datetime('now', '-30 days')
+        `).first();
+        if (r) emailStats = r;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare(`
+          SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts,
+            SUM(CASE WHEN status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
+            SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent
+          FROM emails
+        `).first();
+        if (r) campaigns = r;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare(`
+          SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+            SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts
+          FROM sequences
+        `).first();
+        if (r) sequences = r;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM sequence_enrollments WHERE status = 'active'").first();
+        activeEnrollments = r?.c || 0;
+      } catch (e) {}
+      
+      try {
+        const r = await db.prepare("SELECT COUNT(*) as c FROM lists WHERE status != 'archived'").first();
+        lists = r?.c || 0;
+      } catch (e) {}
       
       const sent = emailStats?.total_sends || 0;
       const opens = emailStats?.opens || 0;
@@ -1209,14 +1279,14 @@ async function executeTool(name, args, env) {
       
       let out = `📊 **Courier Platform Stats**\n\n`;
       out += `**📧 Lists & Subscribers**\n`;
-      out += `• Lists: ${lists?.c || 0}\n`;
-      out += `• Active Subscriptions: ${activeSubs?.c || 0}\n`;
-      out += `• Unsubscribed: ${unsubscribed?.c || 0}\n`;
-      out += `• Total Leads: ${totalLeads?.c || 0}\n`;
+      out += `• Lists: ${lists}\n`;
+      out += `• Active Subscriptions: ${activeSubs}\n`;
+      out += `• Unsubscribed: ${unsubscribed}\n`;
+      out += `• Total Leads: ${totalLeads}\n`;
       out += `\n**📈 Lead Growth**\n`;
-      out += `• Today: +${todayLeads?.c || 0}\n`;
-      out += `• This Week: +${weekLeads?.c || 0}\n`;
-      out += `• This Month: +${monthLeads?.c || 0}\n`;
+      out += `• Today: +${todayLeads}\n`;
+      out += `• This Week: +${weekLeads}\n`;
+      out += `• This Month: +${monthLeads}\n`;
       out += `\n**📨 Campaigns**\n`;
       out += `• Total: ${campaigns?.total || 0}\n`;
       out += `• Drafts: ${campaigns?.drafts || 0}\n`;
@@ -1226,7 +1296,7 @@ async function executeTool(name, args, env) {
       out += `• Total: ${sequences?.total || 0}\n`;
       out += `• Active: ${sequences?.active || 0}\n`;
       out += `• Drafts: ${sequences?.drafts || 0}\n`;
-      out += `• Active Enrollments: ${activeEnrollments?.c || 0}\n`;
+      out += `• Active Enrollments: ${activeEnrollments}\n`;
       out += `\n**📬 Email Performance (Last 30 Days)**\n`;
       out += `• Emails Sent: ${sent}\n`;
       out += `• Opens: ${opens} (${sent ? Math.round(opens/sent*100) : 0}%)\n`;
