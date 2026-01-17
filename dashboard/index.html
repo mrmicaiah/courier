@@ -80,6 +80,8 @@
     .badge-scheduled { background: var(--blue-50); color: var(--blue-600); border-color: var(--blue-400); }
     .badge-paused { background: var(--gray-100); color: var(--gray-600); border-color: var(--gray-400); }
     .checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: var(--blue-600); }
+    .clickable { cursor: pointer; color: var(--blue-600); }
+    .clickable:hover { text-decoration: underline; }
     
     /* Modal */
     .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
@@ -102,8 +104,6 @@
     
     /* Utils */
     .loading, .empty-state { text-align: center; padding: 48px 20px; color: var(--gray-600); }
-    .clickable { cursor: pointer; color: var(--blue-600); }
-    .clickable:hover { text-decoration: underline; }
     code { background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
     .selection-info { font-size: 0.875rem; color: var(--gray-600); padding: 8px 0; }
   </style>
@@ -389,14 +389,25 @@
     }
 
     // Tab switching
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+      document.getElementById('panel-' + tabName).classList.add('active');
+    }
+    
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', function() {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+        switchTab(tab.dataset.tab);
       });
     });
+
+    // Navigate to subscribers filtered by list
+    function viewListSubscribers(listId) {
+      document.getElementById('listFilter').value = listId;
+      switchTab('subscribers');
+      loadSubscribers();
+    }
 
     // Init
     async function initApp() {
@@ -459,7 +470,7 @@
         <tr>
           <td><strong>${escapeHtml(list.name)}</strong></td>
           <td><code>${escapeHtml(list.slug)}</code></td>
-          <td>${list.subscriber_count || 0}</td>
+          <td><span class="clickable" onclick="viewListSubscribers('${list.id}')">${list.subscriber_count || 0}</span></td>
           <td><span class="badge badge-${list.status}">${list.status}</span></td>
         </tr>
       `).join('');
@@ -573,6 +584,7 @@
         showToast(`Deleted ${count} subscriber(s)`, 'success');
         selectedSubscribers.clear();
         await loadSubscribers();
+        await loadLists();
         await loadStats();
       } catch (err) {
         showToast('Failed to delete subscribers', 'error');
