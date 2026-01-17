@@ -36,7 +36,9 @@ const TOOLS = [
         slug: { type: "string", description: "URL-safe identifier" },
         description: { type: "string" },
         reply_to: { type: "string" },
-        notify_email: { type: "string", description: "Email for new subscriber notifications" }
+        notify_email: { type: "string", description: "Email for new subscriber notifications" },
+        campaign_template_id: { type: "string", description: "Template ID for campaign emails" },
+        sequence_template_id: { type: "string", description: "Template ID for sequence emails" }
       },
       required: ["name", "from_name", "from_email"]
     }
@@ -55,7 +57,9 @@ const TOOLS = [
         reply_to: { type: "string" },
         notify_email: { type: "string" },
         description: { type: "string" },
-        status: { type: "string", enum: ["active", "paused"] }
+        status: { type: "string", enum: ["active", "paused"] },
+        campaign_template_id: { type: "string", description: "Template ID for campaign emails" },
+        sequence_template_id: { type: "string", description: "Template ID for sequence emails" }
       },
       required: ["list_id"]
     }
@@ -433,7 +437,16 @@ async function executeTool(name, args, env) {
   switch (name) {
     // ==================== LISTS ====================
     case "courier_list_lists": {
-      const results = await db.prepare('SELECT * FROM lists WHERE status != ? ORDER BY created_at DESC').bind('archived').all();
+      const results = await db.prepare(`
+        SELECT l.*, 
+          ct.name as campaign_template_name,
+          st.name as sequence_template_name
+        FROM lists l
+        LEFT JOIN templates ct ON l.campaign_template_id = ct.id
+        LEFT JOIN templates st ON l.sequence_template_id = st.id
+        WHERE l.status != 'archived' 
+        ORDER BY l.created_at DESC
+      `).all();
       if (!results.results?.length) return "📭 No email lists found";
       
       let out = `📋 **Email Lists** (${results.results.length})\n\n`;
@@ -442,13 +455,23 @@ async function executeTool(name, args, env) {
         out += `  Slug: ${l.slug}\n`;
         out += `  From: ${l.from_name} <${l.from_email}>\n`;
         if (l.notify_email) out += `  📬 Notifications: ${l.notify_email}\n`;
+        if (l.sequence_template_name) out += `  📧 Sequence Template: ${l.sequence_template_name}\n`;
+        if (l.campaign_template_name) out += `  📨 Campaign Template: ${l.campaign_template_name}\n`;
         out += `  ID: ${l.id}\n\n`;
       }
       return out;
     }
     
     case "courier_get_list": {
-      const l = await db.prepare('SELECT * FROM lists WHERE id = ? OR slug = ?').bind(args.list_id, args.list_id).first();
+      const l = await db.prepare(`
+        SELECT l.*, 
+          ct.name as campaign_template_name,
+          st.name as sequence_template_name
+        FROM lists l
+        LEFT JOIN templates ct ON l.campaign_template_id = ct.id
+        LEFT JOIN templates st ON l.sequence_template_id = st.id
+        WHERE l.id = ? OR l.slug = ?
+      `).bind(args.list_id, args.list_id).first();
       if (!l) return "⛔ List not found";
       
       const subs = await db.prepare('SELECT COUNT(*) as count FROM subscriptions WHERE list_id = ? AND status = ?').bind(l.id, 'active').first();
@@ -462,7 +485,10 @@ async function executeTool(name, args, env) {
       if (l.notify_email) out += `**Lead Notifications:** ${l.notify_email}\n`;
       if (l.description) out += `**Description:** ${l.description}\n`;
       out += `**Subscribers:** ${subs?.count || 0}\n`;
-      out += `**Created:** ${l.created_at}\n`;
+      out += `\n**Templates:**\n`;
+      out += `• Sequence: ${l.sequence_template_name || '⚠️ Not set'} ${l.sequence_template_id ? `(${l.sequence_template_id})` : ''}\n`;
+      out += `• Campaign: ${l.campaign_template_name || '(Not set)'} ${l.campaign_template_id ? `(${l.campaign_template_id})` : ''}\n`;
+      out += `\n**Created:** ${l.created_at}\n`;
       return out;
     }
     
@@ -472,12 +498,28 @@ async function executeTool(name, args, env) {
       const now = new Date().toISOString();
       
       await db.prepare(`
-        INSERT INTO lists (id, name, slug, from_name, from_email, reply_to, description, notify_email, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-      `).bind(id, args.name, slug, args.from_name, args.from_email, args.reply_to || null, args.description || null, args.notify_email || null, now, now).run();
+        INSERT INTO lists (id, name, slug, from_name, from_email, reply_to, description, notify_email, campaign_template_id, sequence_template_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      `).bind(
+        id, 
+        args.name, 
+        slug, 
+        args.from_name, 
+        args.from_email, 
+        args.reply_to || null, 
+        args.description || null, 
+        args.notify_email || null,
+        args.campaign_template_id || null,
+        args.sequence_template_id || null,
+        now, 
+        now
+      ).run();
       
       let msg = `✅ List created: **${args.name}**\nID: ${id}\nSlug: ${slug}`;
       if (args.notify_email) msg += `\n📬 Lead notifications: ${args.notify_email}`;
+      if (args.sequence_template_id) msg += `\n📧 Sequence template linked`;
+      if (args.campaign_template_id) msg += `\n📨 Campaign template linked`;
+      if (!args.sequence_template_id) msg += `\n\n⚠️ No sequence template set - sequences will use basic styling`;
       return msg;
     }
     
@@ -493,6 +535,8 @@ async function executeTool(name, args, env) {
       if (args.notify_email !== undefined) { updates.push('notify_email = ?'); values.push(args.notify_email); }
       if (args.description !== undefined) { updates.push('description = ?'); values.push(args.description); }
       if (args.status !== undefined) { updates.push('status = ?'); values.push(args.status); }
+      if (args.campaign_template_id !== undefined) { updates.push('campaign_template_id = ?'); values.push(args.campaign_template_id || null); }
+      if (args.sequence_template_id !== undefined) { updates.push('sequence_template_id = ?'); values.push(args.sequence_template_id || null); }
       
       if (updates.length === 0) return "⛔ No updates provided";
       
@@ -505,6 +549,8 @@ async function executeTool(name, args, env) {
       let msg = '✅ List updated';
       if (args.notify_email) msg += `\n📬 Lead notifications: ${args.notify_email}`;
       else if (args.notify_email === '') msg += '\n🔕 Lead notifications disabled';
+      if (args.sequence_template_id) msg += '\n📧 Sequence template linked';
+      if (args.campaign_template_id) msg += '\n📨 Campaign template linked';
       return msg;
     }
     
