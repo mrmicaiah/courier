@@ -4,6 +4,9 @@
 
 import { generateId, jsonResponse } from './lib.js';
 
+// Default send time for sequence emails (9 AM in sequence's timezone)
+const DEFAULT_SEND_TIME = '09:00';
+
 export async function handleGetSequences(request, env) {
   const url = new URL(request.url);
   const listId = url.searchParams.get('list_id');
@@ -216,8 +219,15 @@ export async function handleAddSequenceStep(sequenceId, request, env) {
       return jsonResponse({ error: 'Body HTML required' }, 400);
     }
     
-    if (data.send_at_time && !/^\d{2}:\d{2}$/.test(data.send_at_time)) {
-      return jsonResponse({ error: 'send_at_time must be in HH:MM format (e.g., "07:00")' }, 400);
+    // Determine send_at_time: use provided value, or default to 9 AM
+    // If explicitly set to null, allow it (for immediate sends based on delay only)
+    let sendAtTime = DEFAULT_SEND_TIME;
+    if (data.send_at_time !== undefined) {
+      sendAtTime = data.send_at_time;
+    }
+    
+    if (sendAtTime && !/^\d{2}:\d{2}$/.test(sendAtTime)) {
+      return jsonResponse({ error: 'send_at_time must be in HH:MM format (e.g., "09:00")' }, 400);
     }
     
     const lastStep = await env.DB.prepare(
@@ -236,7 +246,7 @@ export async function handleAddSequenceStep(sequenceId, request, env) {
       sequenceId,
       position,
       data.delay_minutes || 0,
-      data.send_at_time || null,
+      sendAtTime,
       data.subject,
       data.preview_text || null,
       data.body_html,
@@ -265,7 +275,7 @@ export async function handleUpdateSequenceStep(sequenceId, stepId, request, env)
     }
     
     if (data.send_at_time && !/^\d{2}:\d{2}$/.test(data.send_at_time)) {
-      return jsonResponse({ error: 'send_at_time must be in HH:MM format (e.g., "07:00")' }, 400);
+      return jsonResponse({ error: 'send_at_time must be in HH:MM format (e.g., "09:00")' }, 400);
     }
     
     await env.DB.prepare(`
@@ -394,7 +404,7 @@ export async function handleEnrollInSequence(sequenceId, request, env) {
       let nextSendAt;
       
       if (firstStep) {
-        if (firstStep.delay_minutes === 0) {
+        if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
           nextSendAt = now.toISOString();
         } else {
           nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
@@ -421,7 +431,9 @@ export async function handleEnrollInSequence(sequenceId, request, env) {
     const now = new Date();
     let nextSendAt;
     
-    if (firstStep.delay_minutes === 0) {
+    // If delay is 0 AND no send_at_time, send immediately
+    // Otherwise, calculate based on send_at_time
+    if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
       nextSendAt = now.toISOString();
     } else {
       nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
@@ -450,12 +462,18 @@ export async function handleEnrollInSequence(sequenceId, request, env) {
 function calculateNextSendAtForEnrollment(step, timezone) {
   const now = new Date();
   
+  // If no send_at_time, just add delay
   if (!step.send_at_time) {
     return new Date(now.getTime() + (step.delay_minutes || 0) * 60000).toISOString();
   }
   
   const [hours, minutes] = step.send_at_time.split(':').map(Number);
-  const daysToWait = Math.max(1, Math.floor((step.delay_minutes || 1440) / 1440));
+  
+  // Calculate days to wait based on delay_minutes
+  // For delay_minutes = 0 with send_at_time, we still wait until that time (today or tomorrow)
+  // For delay_minutes >= 1440 (1 day), we wait that many days
+  const daysFromDelay = Math.floor((step.delay_minutes || 0) / 1440);
+  const daysToWait = step.delay_minutes === 0 ? 0 : Math.max(1, daysFromDelay);
   
   let targetDate = new Date(now);
   targetDate.setUTCHours(hours, minutes, 0, 0);
@@ -472,6 +490,7 @@ function calculateNextSendAtForEnrollment(step, timezone) {
   targetDate.setUTCHours(targetDate.getUTCHours() + offsetHours);
   targetDate.setUTCDate(targetDate.getUTCDate() + daysToWait);
   
+  // If the calculated time is in the past, push to next day
   if (targetDate <= now) {
     targetDate.setUTCDate(targetDate.getUTCDate() + 1);
   }
@@ -537,7 +556,8 @@ export async function enrollInSequence(env, subscriptionId, sequenceId) {
     const now = new Date();
     let nextSendAt;
     
-    if (firstStep.delay_minutes === 0) {
+    // If delay is 0 AND no send_at_time, send immediately
+    if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
       nextSendAt = now.toISOString();
     } else {
       nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
