@@ -16,6 +16,7 @@ export const ALLOWED_ORIGINS = [
   'https://proverbs.untitledpublishers.com',
   'https://contractorsparty.com',
   'https://www.contractorsparty.com',
+  'https://mrmicaiah.github.io',
   'http://localhost:3000',
   'http://127.0.0.1:5500',
 ];
