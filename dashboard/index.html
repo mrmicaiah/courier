@@ -6,7 +6,7 @@
   <title>Courier - Email Platform</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --blue-700: #1d4ed8; --blue-600: #2563eb; --blue-500: #3b82f6; --blue-100: #dbeafe; --blue-50: #eff6ff; --gray-900: #111827; --gray-700: #374151; --gray-600: #4b5563; --gray-500: #6b7285; --gray-400: #9ca3af; --gray-300: #d1d5db; --gray-200: #e5e7eb; --gray-100: #f3f4f6; --gray-50: #f9fafb; --white: #ffffff; --green-700: #15803d; --green-500: #22c55e; --green-100: #dcfce7; --red-700: #b91c1c; --red-600: #dc2626; --red-500: #ef4444; --yellow-700: #a16207; --yellow-500: #eab308; --yellow-100: #fef9c3; --shadow: 0 2px 4px 0 rgb(0 0 0 / 0.12); --shadow-md: 0 4px 8px -1px rgb(0 0 0 / 0.15); }
+    :root { --blue-700: #1d4ed8; --blue-600: #2563eb; --blue-500: #3b82f6; --blue-100: #dbeafe; --blue-50: #eff6ff; --gray-900: #111827; --gray-700: #374151; --gray-600: #4b5563; --gray-500: #6b7285; --gray-400: #9ca3af; --gray-300: #d1d5db; --gray-200: #e5e7eb; --gray-100: #f3f4f6; --gray-50: #f9fafb; --white: #ffffff; --green-700: #15803d; --green-500: #22c55e; --green-100: #dcfce7; --red-700: #b91c1c; --red-600: #dc2626; --red-500: #ef4444; --yellow-700: #a16207; --yellow-500: #eab308; --yellow-100: #fef9c3; --purple-700: #7c3aed; --purple-100: #ede9fe; --shadow: 0 2px 4px 0 rgb(0 0 0 / 0.12); --shadow-md: 0 4px 8px -1px rgb(0 0 0 / 0.15); }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--gray-200); color: var(--gray-900); line-height: 1.5; }
     
     /* Login */
@@ -51,6 +51,14 @@
     .stat-card { background: var(--white); border: 2px solid var(--gray-400); border-radius: 12px; padding: 20px; box-shadow: var(--shadow); }
     .stat-card .label { font-size: 0.8rem; color: var(--gray-600); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
     .stat-card .value { font-size: 2rem; font-weight: 700; }
+    .stat-card .subtext { font-size: 0.8rem; color: var(--gray-500); margin-top: 4px; }
+    .stat-card.highlight { border-color: var(--blue-500); background: var(--blue-50); }
+    .stat-card.success { border-color: var(--green-500); }
+    .stat-card.warning { border-color: var(--yellow-500); }
+    
+    /* Stats Sections */
+    .stats-section { margin-bottom: 32px; }
+    .stats-section h3 { font-size: 1rem; font-weight: 700; color: var(--gray-700); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--gray-300); }
     
     /* Cards & Tables */
     .card { background: var(--white); border: 2px solid var(--gray-400); border-radius: 12px; margin-bottom: 20px; box-shadow: var(--shadow); }
@@ -83,6 +91,21 @@
     .clickable { cursor: pointer; color: var(--blue-600); }
     .clickable:hover { text-decoration: underline; }
     .tag { display: inline-block; padding: 2px 8px; background: var(--blue-100); color: var(--blue-700); border-radius: 4px; font-size: 0.75rem; margin-right: 4px; margin-bottom: 2px; }
+    .tag.trigger { background: var(--purple-100); color: var(--purple-700); }
+    
+    /* Campaign Groups */
+    .campaign-group { border: 2px solid var(--gray-300); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+    .campaign-group-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; background: var(--gray-100); cursor: pointer; border-bottom: 2px solid var(--gray-300); }
+    .campaign-group-header:hover { background: var(--gray-200); }
+    .campaign-group-header h3 { font-size: 0.95rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .campaign-group-header .toggle { font-size: 0.8rem; color: var(--gray-500); }
+    .campaign-group-stats { display: flex; gap: 12px; font-size: 0.8rem; color: var(--gray-600); }
+    .campaign-group-stats .stat { display: flex; align-items: center; gap: 4px; }
+    .campaign-group-body { display: none; }
+    .campaign-group.expanded .campaign-group-body { display: block; }
+    .campaign-group.expanded .toggle { transform: rotate(180deg); }
+    .campaign-group table { min-width: auto; }
+    .campaign-group th, .campaign-group td { padding: 12px 20px; }
     
     /* Modal */
     .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
@@ -107,6 +130,7 @@
     .loading, .empty-state { text-align: center; padding: 48px 20px; color: var(--gray-600); }
     code { background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
     .selection-info { font-size: 0.875rem; color: var(--gray-600); padding: 8px 0; }
+    .muted { color: var(--gray-500); }
   </style>
 </head>
 <body>
@@ -156,8 +180,8 @@
     <div class="content">
       <!-- Stats Panel -->
       <div class="panel active" id="panel-stats">
-        <div class="stats-grid" id="statsGrid">
-          <div class="loading">Loading...</div>
+        <div id="statsContent">
+          <div class="loading">Loading stats...</div>
         </div>
       </div>
       
@@ -217,8 +241,8 @@
           </div>
           <div class="card-body">
             <table>
-              <thead><tr><th>Name</th><th>List</th><th>Steps</th><th>Active</th><th>Status</th></tr></thead>
-              <tbody id="sequencesTable"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody>
+              <thead><tr><th>Name</th><th>List</th><th>Trigger</th><th>Steps</th><th>Active</th><th>Status</th></tr></thead>
+              <tbody id="sequencesTable"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -243,13 +267,14 @@
       <div class="panel" id="panel-campaigns">
         <div class="card">
           <div class="card-header">
-            <h2>Campaigns</h2>
+            <h2>Campaigns by List</h2>
+            <div class="card-actions">
+              <button class="btn btn-sm" onclick="expandAllCampaigns()">Expand All</button>
+              <button class="btn btn-sm" onclick="collapseAllCampaigns()">Collapse All</button>
+            </div>
           </div>
-          <div class="card-body">
-            <table>
-              <thead><tr><th>Subject</th><th>List</th><th>Status</th><th>Sent</th></tr></thead>
-              <tbody id="campaignsTable"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
-            </table>
+          <div class="card-body" style="padding: 16px;" id="campaignsContent">
+            <div class="loading">Loading...</div>
           </div>
         </div>
       </div>
@@ -276,6 +301,7 @@
     let currentLists = [];
     let currentSubscribers = [];
     let selectedSubscribers = new Set();
+    let allCampaigns = [];
 
     // Check for saved session
     const savedKey = sessionStorage.getItem('courier_key');
@@ -415,17 +441,19 @@
     async function initApp() {
       try {
         await loadLists();
-        await loadStats();
-        await loadSubscribers();
-        await loadSequences();
-        await loadTemplates();
-        await loadCampaigns();
+        await Promise.all([
+          loadStats(),
+          loadSubscribers(),
+          loadSequences(),
+          loadTemplates(),
+          loadCampaigns()
+        ]);
       } catch (err) {
         console.error('Init error:', err);
       }
     }
 
-    // Load Stats
+    // Load Stats - Enhanced version
     async function loadStats() {
       const data = await api('/api/stats');
       document.getElementById('statLists').textContent = currentLists.length || 0;
@@ -433,22 +461,121 @@
       
       const weekTotal = data.last_7_days?.reduce((a, d) => a + d.count, 0) || 0;
       
-      document.getElementById('statsGrid').innerHTML = `
-        <div class="stat-card">
-          <div class="label">Total Leads</div>
-          <div class="value">${data.total || 0}</div>
+      // Get email performance stats
+      let emailStats = { sent: 0, opened: 0, clicked: 0, bounced: 0 };
+      let sequenceStats = { total: 0, active: 0, enrollments: 0 };
+      let campaignStats = { total: 0, drafts: 0, scheduled: 0, sent: 0 };
+      
+      // Compute campaign stats from loaded campaigns
+      if (allCampaigns.length > 0) {
+        campaignStats.total = allCampaigns.length;
+        campaignStats.drafts = allCampaigns.filter(c => c.status === 'draft').length;
+        campaignStats.scheduled = allCampaigns.filter(c => c.status === 'scheduled').length;
+        campaignStats.sent = allCampaigns.filter(c => c.status === 'sent').length;
+      }
+      
+      // Try to get email send stats
+      try {
+        // Load a few sent campaigns and aggregate their stats
+        const sentCampaigns = allCampaigns.filter(c => c.status === 'sent').slice(0, 10);
+        for (const campaign of sentCampaigns) {
+          try {
+            const stats = await api(`/api/emails/${campaign.id}/stats`);
+            if (stats.stats) {
+              emailStats.sent += stats.stats.sent || 0;
+              emailStats.opened += stats.stats.opened || 0;
+              emailStats.clicked += stats.stats.clicked || 0;
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+      
+      // Get sequence stats
+      try {
+        const seqData = await api('/api/sequences');
+        const seqs = seqData.sequences || [];
+        sequenceStats.total = seqs.length;
+        sequenceStats.active = seqs.filter(s => s.status === 'active').length;
+        sequenceStats.enrollments = seqs.reduce((sum, s) => sum + (s.active_enrollments || 0), 0);
+      } catch (e) {}
+      
+      const openRate = emailStats.sent > 0 ? Math.round(emailStats.opened / emailStats.sent * 100) : 0;
+      const clickRate = emailStats.sent > 0 ? Math.round(emailStats.clicked / emailStats.sent * 100) : 0;
+      
+      document.getElementById('statsContent').innerHTML = `
+        <!-- Lead Growth -->
+        <div class="stats-section">
+          <h3>📈 Lead Growth</h3>
+          <div class="stats-grid">
+            <div class="stat-card highlight">
+              <div class="label">Total Leads</div>
+              <div class="value">${data.total || 0}</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Today</div>
+              <div class="value">${data.today || 0}</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">This Week</div>
+              <div class="value">${weekTotal}</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Active Lists</div>
+              <div class="value">${currentLists.length || 0}</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="label">Active Lists</div>
-          <div class="value">${currentLists.length || 0}</div>
+        
+        <!-- Email Performance -->
+        <div class="stats-section">
+          <h3>📬 Email Performance</h3>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="label">Emails Sent</div>
+              <div class="value">${emailStats.sent}</div>
+              <div class="subtext">Recent campaigns</div>
+            </div>
+            <div class="stat-card ${openRate >= 20 ? 'success' : ''}">
+              <div class="label">Opens</div>
+              <div class="value">${emailStats.opened}</div>
+              <div class="subtext">${openRate}% open rate</div>
+            </div>
+            <div class="stat-card ${clickRate >= 3 ? 'success' : ''}">
+              <div class="label">Clicks</div>
+              <div class="value">${emailStats.clicked}</div>
+              <div class="subtext">${clickRate}% click rate</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Click-to-Open</div>
+              <div class="value">${emailStats.opened > 0 ? Math.round(emailStats.clicked / emailStats.opened * 100) : 0}%</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="label">This Week</div>
-          <div class="value">${weekTotal}</div>
-        </div>
-        <div class="stat-card">
-          <div class="label">Today</div>
-          <div class="value">${data.today || 0}</div>
+        
+        <!-- Campaigns & Sequences -->
+        <div class="stats-section">
+          <h3>✉️ Campaigns & Sequences</h3>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="label">Total Campaigns</div>
+              <div class="value">${campaignStats.total}</div>
+              <div class="subtext">${campaignStats.sent} sent, ${campaignStats.drafts} drafts</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Scheduled</div>
+              <div class="value">${campaignStats.scheduled}</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Sequences</div>
+              <div class="value">${sequenceStats.total}</div>
+              <div class="subtext">${sequenceStats.active} active</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Active Enrollments</div>
+              <div class="value">${sequenceStats.enrollments}</div>
+              <div class="subtext">In sequences</div>
+            </div>
+          </div>
         </div>
       `;
     }
@@ -619,25 +746,38 @@
       updateDeleteButton();
     }
 
-    // Load Sequences
+    // Load Sequences - Enhanced with trigger display
     async function loadSequences() {
       const data = await api('/api/sequences');
       const seqs = data.sequences || [];
       
       if (!seqs.length) {
-        document.getElementById('sequencesTable').innerHTML = '<tr><td colspan="5" class="empty-state">No sequences</td></tr>';
+        document.getElementById('sequencesTable').innerHTML = '<tr><td colspan="6" class="empty-state">No sequences</td></tr>';
         return;
       }
       
-      document.getElementById('sequencesTable').innerHTML = seqs.map(seq => `
-        <tr>
-          <td><strong>${escapeHtml(seq.name)}</strong></td>
-          <td>${escapeHtml(seq.list_name || '-')}</td>
-          <td>${seq.step_count || 0}</td>
-          <td>${seq.active_enrollments || 0}</td>
-          <td><span class="badge badge-${seq.status}">${seq.status}</span></td>
-        </tr>
-      `).join('');
+      document.getElementById('sequencesTable').innerHTML = seqs.map(seq => {
+        // Format trigger display
+        let triggerHtml = seq.trigger_type;
+        if (seq.trigger_type === 'tag' && seq.trigger_value) {
+          triggerHtml = `<span class="tag trigger">tag: ${escapeHtml(seq.trigger_value)}</span>`;
+        } else if (seq.trigger_type === 'subscribe') {
+          triggerHtml = '<span class="muted">on subscribe</span>';
+        } else if (seq.trigger_value) {
+          triggerHtml = `${seq.trigger_type}: ${escapeHtml(seq.trigger_value)}`;
+        }
+        
+        return `
+          <tr>
+            <td><strong>${escapeHtml(seq.name)}</strong></td>
+            <td>${escapeHtml(seq.list_name || '-')}</td>
+            <td>${triggerHtml}</td>
+            <td>${seq.step_count || 0}</td>
+            <td>${seq.active_enrollments || 0}</td>
+            <td><span class="badge badge-${seq.status}">${seq.status}</span></td>
+          </tr>
+        `;
+      }).join('');
     }
 
     // Load Templates
@@ -659,24 +799,97 @@
       `).join('');
     }
 
-    // Load Campaigns
+    // Load Campaigns - Grouped by List
     async function loadCampaigns() {
-      const data = await api('/api/emails');
+      const data = await api('/api/emails?limit=100');
       const emails = data.emails || [];
+      allCampaigns = emails;
       
       if (!emails.length) {
-        document.getElementById('campaignsTable').innerHTML = '<tr><td colspan="4" class="empty-state">No campaigns</td></tr>';
+        document.getElementById('campaignsContent').innerHTML = '<div class="empty-state">No campaigns</div>';
         return;
       }
       
-      document.getElementById('campaignsTable').innerHTML = emails.map(email => `
-        <tr>
-          <td><strong>${escapeHtml(email.subject)}</strong></td>
-          <td>${escapeHtml(email.list_name || 'All')}</td>
-          <td><span class="badge badge-${email.status}">${email.status}</span></td>
-          <td>${email.sent_count || '-'}</td>
-        </tr>
-      `).join('');
+      // Group campaigns by list
+      const groups = {};
+      const noListKey = '__no_list__';
+      
+      emails.forEach(email => {
+        const key = email.list_id || noListKey;
+        if (!groups[key]) {
+          groups[key] = {
+            listId: email.list_id,
+            listName: email.list_name || 'No List (All Subscribers)',
+            campaigns: [],
+            drafts: 0,
+            scheduled: 0,
+            sent: 0
+          };
+        }
+        groups[key].campaigns.push(email);
+        if (email.status === 'draft') groups[key].drafts++;
+        else if (email.status === 'scheduled') groups[key].scheduled++;
+        else if (email.status === 'sent') groups[key].sent++;
+      });
+      
+      // Sort groups: lists with most campaigns first, no-list at the end
+      const sortedGroups = Object.values(groups).sort((a, b) => {
+        if (a.listId === null) return 1;
+        if (b.listId === null) return -1;
+        return b.campaigns.length - a.campaigns.length;
+      });
+      
+      let html = '';
+      
+      sortedGroups.forEach((group, index) => {
+        const groupId = `campaign-group-${index}`;
+        
+        html += `
+          <div class="campaign-group" id="${groupId}">
+            <div class="campaign-group-header" onclick="toggleCampaignGroup('${groupId}')">
+              <h3>
+                📋 ${escapeHtml(group.listName)}
+                <span class="muted">(${group.campaigns.length})</span>
+              </h3>
+              <div class="campaign-group-stats">
+                ${group.drafts > 0 ? `<span class="stat">📝 ${group.drafts} drafts</span>` : ''}
+                ${group.scheduled > 0 ? `<span class="stat">⏰ ${group.scheduled} scheduled</span>` : ''}
+                ${group.sent > 0 ? `<span class="stat">✅ ${group.sent} sent</span>` : ''}
+                <span class="toggle">▼</span>
+              </div>
+            </div>
+            <div class="campaign-group-body">
+              <table>
+                <thead><tr><th>Subject</th><th>Status</th><th>Sent</th><th>Date</th></tr></thead>
+                <tbody>
+                  ${group.campaigns.map(email => `
+                    <tr>
+                      <td><strong>${escapeHtml(email.subject)}</strong></td>
+                      <td><span class="badge badge-${email.status}">${email.status}</span></td>
+                      <td>${email.sent_count || '-'}</td>
+                      <td>${formatDate(email.sent_at || email.scheduled_at || email.created_at)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      });
+      
+      document.getElementById('campaignsContent').innerHTML = html;
+    }
+
+    function toggleCampaignGroup(groupId) {
+      document.getElementById(groupId).classList.toggle('expanded');
+    }
+
+    function expandAllCampaigns() {
+      document.querySelectorAll('.campaign-group').forEach(g => g.classList.add('expanded'));
+    }
+
+    function collapseAllCampaigns() {
+      document.querySelectorAll('.campaign-group').forEach(g => g.classList.remove('expanded'));
     }
 
     // Modal
