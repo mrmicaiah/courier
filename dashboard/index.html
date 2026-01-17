@@ -94,7 +94,21 @@
     .tag { display: inline-block; padding: 2px 8px; background: var(--blue-100); color: var(--blue-700); border-radius: 4px; font-size: 0.75rem; margin-right: 4px; margin-bottom: 2px; }
     .tag.trigger { background: var(--purple-100); color: var(--purple-700); }
     
-    /* Campaign Groups */
+    /* Grouped Content (Campaigns, Templates) */
+    .content-group { border: 2px solid var(--gray-300); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+    .content-group-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; background: var(--gray-100); cursor: pointer; border-bottom: 2px solid var(--gray-300); }
+    .content-group-header:hover { background: var(--gray-200); }
+    .content-group-header h3 { font-size: 0.95rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .content-group-header .toggle { font-size: 0.8rem; color: var(--gray-500); transition: transform 0.2s; }
+    .content-group-meta { display: flex; gap: 12px; font-size: 0.8rem; color: var(--gray-600); align-items: center; }
+    .content-group-meta .stat { display: flex; align-items: center; gap: 4px; }
+    .content-group-body { display: none; }
+    .content-group.expanded .content-group-body { display: block; }
+    .content-group.expanded .toggle { transform: rotate(180deg); }
+    .content-group table { min-width: auto; }
+    .content-group th, .content-group td { padding: 12px 20px; }
+    
+    /* Legacy campaign-group (keep for backwards compat) */
     .campaign-group { border: 2px solid var(--gray-300); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
     .campaign-group-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; background: var(--gray-100); cursor: pointer; border-bottom: 2px solid var(--gray-300); }
     .campaign-group-header:hover { background: var(--gray-200); }
@@ -267,13 +281,17 @@
       <div class="panel" id="panel-templates">
         <div class="card">
           <div class="card-header">
-            <h2>Templates</h2>
+            <h2>Templates by List</h2>
+            <div class="card-actions">
+              <select class="select-styled" id="templateListJump" onchange="jumpToTemplateList(this.value)">
+                <option value="">Jump to list...</option>
+              </select>
+              <button class="btn btn-sm" onclick="expandAllTemplates()">Expand All</button>
+              <button class="btn btn-sm" onclick="collapseAllTemplates()">Collapse All</button>
+            </div>
           </div>
-          <div class="card-body">
-            <table>
-              <thead><tr><th>Name</th><th>Subject</th><th>Category</th></tr></thead>
-              <tbody id="templatesTable"><tr><td colspan="3" class="loading">Loading...</td></tr></tbody>
-            </table>
+          <div class="card-body" style="padding: 16px;" id="templatesContent">
+            <div class="loading">Loading...</div>
           </div>
         </div>
       </div>
@@ -318,6 +336,8 @@
     let selectedSubscribers = new Set();
     let allCampaigns = [];
     let allSequences = [];
+    let allTemplates = [];
+    let templateGroups = [];
 
     // Check for saved session
     const savedKey = sessionStorage.getItem('courier_key');
@@ -881,22 +901,116 @@
       return days === 1 ? '1 day' : `${days} days`;
     }
 
+    // Load Templates - Grouped by List
     async function loadTemplates() {
       const data = await api('/api/templates');
       const tpls = data.templates || [];
+      allTemplates = tpls;
       
       if (!tpls.length) {
-        document.getElementById('templatesTable').innerHTML = '<tr><td colspan="3" class="empty-state">No templates</td></tr>';
+        document.getElementById('templatesContent').innerHTML = '<div class="empty-state">No templates</div>';
+        document.getElementById('templateListJump').innerHTML = '<option value="">Jump to list...</option>';
         return;
       }
       
-      document.getElementById('templatesTable').innerHTML = tpls.map(tpl => `
-        <tr>
-          <td><strong>${escapeHtml(tpl.name)}</strong></td>
-          <td>${escapeHtml(tpl.subject || '-')}</td>
-          <td>${escapeHtml(tpl.category || '-')}</td>
-        </tr>
-      `).join('');
+      // Group templates by list
+      const groups = {};
+      const noListKey = '__no_list__';
+      
+      tpls.forEach(tpl => {
+        const key = tpl.list_id || noListKey;
+        if (!groups[key]) {
+          groups[key] = {
+            listId: tpl.list_id,
+            listName: tpl.list_name || 'No List (Global)',
+            templates: []
+          };
+        }
+        groups[key].templates.push(tpl);
+      });
+      
+      // Sort: lists with most templates first, "No List" last
+      const sortedGroups = Object.values(groups).sort((a, b) => {
+        if (a.listId === null || a.listId === undefined) return 1;
+        if (b.listId === null || b.listId === undefined) return -1;
+        return b.templates.length - a.templates.length;
+      });
+      
+      templateGroups = sortedGroups;
+      
+      // Update jump dropdown
+      const jumpDropdown = document.getElementById('templateListJump');
+      jumpDropdown.innerHTML = '<option value="">Jump to list...</option>' + 
+        sortedGroups.map((g, i) => `<option value="template-group-${i}">${escapeHtml(g.listName)} (${g.templates.length})</option>`).join('');
+      
+      // Build HTML
+      let html = '';
+      
+      sortedGroups.forEach((group, index) => {
+        const groupId = `template-group-${index}`;
+        
+        // Count categories
+        const categories = {};
+        group.templates.forEach(t => {
+          const cat = t.category || 'Uncategorized';
+          categories[cat] = (categories[cat] || 0) + 1;
+        });
+        const categoryList = Object.entries(categories).map(([cat, count]) => `${cat}: ${count}`).join(', ');
+        
+        html += `
+          <div class="content-group" id="${groupId}">
+            <div class="content-group-header" onclick="toggleTemplateGroup('${groupId}')">
+              <h3>
+                📋 ${escapeHtml(group.listName)}
+                <span class="muted">(${group.templates.length})</span>
+              </h3>
+              <div class="content-group-meta">
+                <span class="muted">${categoryList}</span>
+                <span class="toggle">▼</span>
+              </div>
+            </div>
+            <div class="content-group-body">
+              <table>
+                <thead><tr><th>Name</th><th>Subject</th><th>Category</th></tr></thead>
+                <tbody>
+                  ${group.templates.map(tpl => `
+                    <tr>
+                      <td><strong>${escapeHtml(tpl.name)}</strong></td>
+                      <td>${escapeHtml(tpl.subject || '-')}</td>
+                      <td>${tpl.category ? `<span class="tag">${escapeHtml(tpl.category)}</span>` : '<span class="muted">-</span>'}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      });
+      
+      document.getElementById('templatesContent').innerHTML = html;
+    }
+
+    function toggleTemplateGroup(groupId) {
+      document.getElementById(groupId).classList.toggle('expanded');
+    }
+
+    function expandAllTemplates() {
+      document.querySelectorAll('#templatesContent .content-group').forEach(g => g.classList.add('expanded'));
+    }
+
+    function collapseAllTemplates() {
+      document.querySelectorAll('#templatesContent .content-group').forEach(g => g.classList.remove('expanded'));
+    }
+
+    function jumpToTemplateList(groupId) {
+      if (!groupId) return;
+      const el = document.getElementById(groupId);
+      if (el) {
+        el.classList.add('expanded');
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Reset dropdown
+      document.getElementById('templateListJump').value = '';
     }
 
     async function loadCampaigns() {
