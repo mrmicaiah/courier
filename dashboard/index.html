@@ -477,12 +477,10 @@
       
       const weekTotal = data.last_7_days?.reduce((a, d) => a + d.count, 0) || 0;
       
-      // Get email performance stats
       let emailStats = { sent: 0, opened: 0, clicked: 0, bounced: 0 };
       let sequenceStats = { total: 0, active: 0, enrollments: 0 };
       let campaignStats = { total: 0, drafts: 0, scheduled: 0, sent: 0 };
       
-      // Compute campaign stats from loaded campaigns
       if (allCampaigns.length > 0) {
         campaignStats.total = allCampaigns.length;
         campaignStats.drafts = allCampaigns.filter(c => c.status === 'draft').length;
@@ -490,7 +488,6 @@
         campaignStats.sent = allCampaigns.filter(c => c.status === 'sent').length;
       }
       
-      // Try to get email send stats
       try {
         const sentCampaigns = allCampaigns.filter(c => c.status === 'sent').slice(0, 10);
         for (const campaign of sentCampaigns) {
@@ -505,7 +502,6 @@
         }
       } catch (e) {}
       
-      // Get sequence stats
       if (allSequences.length > 0) {
         sequenceStats.total = allSequences.length;
         sequenceStats.active = allSequences.filter(s => s.status === 'active').length;
@@ -516,7 +512,6 @@
       const clickRate = emailStats.sent > 0 ? Math.round(emailStats.clicked / emailStats.sent * 100) : 0;
       
       document.getElementById('statsContent').innerHTML = `
-        <!-- Lead Growth -->
         <div class="stats-section">
           <h3>📈 Lead Growth</h3>
           <div class="stats-grid">
@@ -539,7 +534,6 @@
           </div>
         </div>
         
-        <!-- Email Performance -->
         <div class="stats-section">
           <h3>📬 Email Performance</h3>
           <div class="stats-grid">
@@ -565,7 +559,6 @@
           </div>
         </div>
         
-        <!-- Campaigns & Sequences -->
         <div class="stats-section">
           <h3>✉️ Campaigns & Sequences</h3>
           <div class="stats-grid">
@@ -593,12 +586,11 @@
       `;
     }
 
-    // Load Lists
+    // Load Lists - Delete button only for empty lists
     async function loadLists() {
       const data = await api('/api/lists?status=all');
       currentLists = data.lists || [];
       
-      // Update list filter dropdown
       const listFilter = document.getElementById('listFilter');
       listFilter.innerHTML = '<option value="">All Lists</option>' + 
         currentLists.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
@@ -608,36 +600,33 @@
         return;
       }
       
-      document.getElementById('listsTable').innerHTML = currentLists.map(list => `
-        <tr>
-          <td><strong>${escapeHtml(list.name)}</strong></td>
-          <td><code>${escapeHtml(list.slug)}</code></td>
-          <td><span class="clickable" onclick="viewListSubscribers('${list.id}')">${list.subscriber_count || 0}</span></td>
-          <td><span class="badge badge-${list.status}">${list.status}</span></td>
-          <td class="text-right">
-            <button class="btn btn-xs btn-danger" onclick="deleteList('${list.id}', '${escapeHtml(list.name)}', ${list.subscriber_count || 0})">🗑️ Delete</button>
-          </td>
-        </tr>
-      `).join('');
+      document.getElementById('listsTable').innerHTML = currentLists.map(list => {
+        const subCount = list.subscriber_count || 0;
+        const canDelete = subCount === 0;
+        
+        return `
+          <tr>
+            <td><strong>${escapeHtml(list.name)}</strong></td>
+            <td><code>${escapeHtml(list.slug)}</code></td>
+            <td><span class="clickable" onclick="viewListSubscribers('${list.id}')">${subCount}</span></td>
+            <td><span class="badge badge-${list.status}">${list.status}</span></td>
+            <td class="text-right">
+              ${canDelete 
+                ? `<button class="btn btn-xs btn-danger" onclick="deleteList('${list.id}', '${escapeHtml(list.name)}')">🗑️ Delete</button>`
+                : `<span class="muted" title="Remove subscribers first">-</span>`
+              }
+            </td>
+          </tr>
+        `;
+      }).join('');
     }
 
-    // Delete List
-    async function deleteList(listId, listName, subscriberCount) {
-      let confirmMsg;
-      let forceDelete = false;
-      
-      if (subscriberCount > 0) {
-        confirmMsg = `⚠️ "${listName}" has ${subscriberCount} subscriber(s).\n\nDeleting will:\n- Remove all subscribers from this list\n- Delete all sequences on this list\n- Unlink campaigns (campaigns are preserved)\n\nAre you sure you want to delete this list?`;
-        forceDelete = true;
-      } else {
-        confirmMsg = `Delete list "${listName}"? This cannot be undone.`;
-      }
-      
-      if (!window.confirm(confirmMsg)) return;
+    // Delete List (only empty lists)
+    async function deleteList(listId, listName) {
+      if (!window.confirm(`Delete list "${listName}"? This cannot be undone.`)) return;
       
       try {
-        const endpoint = forceDelete ? `/api/lists/${listId}?force=true` : `/api/lists/${listId}`;
-        const result = await api(endpoint, 'DELETE');
+        const result = await api(`/api/lists/${listId}`, 'DELETE');
         
         if (result.error) {
           showToast(result.error, 'error');
@@ -707,7 +696,6 @@
       }).join('');
     }
 
-    // Selection handling
     function toggleSubscriber(id) {
       id = String(id);
       if (selectedSubscribers.has(id)) {
@@ -756,13 +744,11 @@
       btn.textContent = count > 0 ? `🗑️ Delete (${count})` : '🗑️ Delete Selected';
     }
 
-    // Delete selected subscribers
     async function deleteSelected() {
       const count = selectedSubscribers.size;
       if (count === 0) return;
       
-      const confirmMsg = `Are you sure you want to permanently delete ${count} subscriber(s)? This cannot be undone.`;
-      if (!window.confirm(confirmMsg)) return;
+      if (!window.confirm(`Are you sure you want to permanently delete ${count} subscriber(s)? This cannot be undone.`)) return;
       
       const btn = document.getElementById('deleteSelectedBtn');
       btn.disabled = true;
@@ -788,7 +774,7 @@
       updateDeleteButton();
     }
 
-    // Load Sequences - Enhanced with clickable names
+    // Load Sequences
     async function loadSequences() {
       const data = await api('/api/sequences');
       const seqs = data.sequences || [];
@@ -822,7 +808,6 @@
       }).join('');
     }
 
-    // View Sequence Steps
     async function viewSequence(sequenceId) {
       openModal('Loading...', '<div class="loading">Loading sequence...</div>');
       
@@ -896,7 +881,6 @@
       return days === 1 ? '1 day' : `${days} days`;
     }
 
-    // Load Templates
     async function loadTemplates() {
       const data = await api('/api/templates');
       const tpls = data.templates || [];
@@ -915,7 +899,6 @@
       `).join('');
     }
 
-    // Load Campaigns - Grouped by List
     async function loadCampaigns() {
       const data = await api('/api/emails?limit=100');
       const emails = data.emails || [];
@@ -1006,7 +989,6 @@
       document.querySelectorAll('.campaign-group').forEach(g => g.classList.remove('expanded'));
     }
 
-    // Modal
     function openModal(title, content) {
       document.getElementById('modalTitle').textContent = title;
       document.getElementById('modalContent').innerHTML = content;
@@ -1021,7 +1003,6 @@
       if (e.target === e.currentTarget) closeModal();
     });
 
-    // Helpers
     function formatDate(dateStr) {
       if (!dateStr) return '-';
       return new Date(dateStr).toLocaleDateString();
