@@ -605,31 +605,20 @@ async function executeTool(name, args, env) {
           `To delete anyway, use \`force: true\`. This will unsubscribe all subscribers from this list.`;
       }
       
-      // Delete sequence enrollments
       await db.prepare(`
         DELETE FROM sequence_enrollments 
         WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
       `).bind(args.list_id).run();
       
-      // Delete sequence steps
       await db.prepare(`
         DELETE FROM sequence_steps 
         WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
       `).bind(args.list_id).run();
       
-      // Delete sequences
       await db.prepare('DELETE FROM sequences WHERE list_id = ?').bind(args.list_id).run();
-      
-      // Delete subscriptions
       await db.prepare('DELETE FROM subscriptions WHERE list_id = ?').bind(args.list_id).run();
-      
-      // Unlink campaigns
       await db.prepare('UPDATE emails SET list_id = NULL WHERE list_id = ?').bind(args.list_id).run();
-      
-      // Unlink templates
       await db.prepare('UPDATE templates SET list_id = NULL WHERE list_id = ?').bind(args.list_id).run();
-      
-      // Delete list
       await db.prepare('DELETE FROM lists WHERE id = ?').bind(args.list_id).run();
       
       return `✅ List "${l.name}" deleted\n\n` +
@@ -711,16 +700,6 @@ async function executeTool(name, args, env) {
       params.push(limit, offset);
       
       const results = await db.prepare(query).bind(...params).all();
-      
-      // Get total count for pagination
-      let countQuery = 'SELECT COUNT(*) as total FROM emails e';
-      if (conditions.length) {
-        countQuery += ' WHERE ' + conditions.join(' AND ').replace(/\?/g, () => {
-          const val = params.shift();
-          params.push(val);
-          return `'${val}'`;
-        });
-      }
       const total = await db.prepare('SELECT COUNT(*) as total FROM emails').first();
       
       if (!results.results?.length) return "📭 No campaigns found";
@@ -861,7 +840,7 @@ async function executeTool(name, args, env) {
       out += `• Bounced: ${bounced} (${sent ? Math.round(bounced/sent*100) : 0}%)\n`;
       out += `\n**Engagement:**\n`;
       out += `• Opened: ${opened} (${sent ? Math.round(opened/sent*100) : 0}%)\n`;
-      out += `• Clicked: ${clicked} (${sent ? Math.round(clicked/sent*100) : 0}%)\n`;
+      out += `• Clicked: ${clicked} (${sent ? Math.round(clicks/sent*100) : 0}%)\n`;
       out += `• Click-to-Open: ${opened ? Math.round(clicked/opened*100) : 0}%\n`;
       
       if (topLinks.results?.length > 0) {
@@ -905,12 +884,10 @@ async function executeTool(name, args, env) {
     }
     
     case "courier_send_test": {
-      // For now just return a message - actual sending requires SES integration
       return `✅ Test email would be sent to **${args.email}**\n\n(Note: Actual sending requires campaign send endpoint)`;
     }
     
     case "courier_send_now": {
-      // This would trigger the actual send - for now mark as sent
       const now = new Date().toISOString();
       await db.prepare('UPDATE emails SET status = ?, sent_at = ?, updated_at = ? WHERE id = ?')
         .bind('sent', now, now, args.campaign_id).run();
@@ -940,8 +917,6 @@ async function executeTool(name, args, env) {
         const icon = s.status === 'active' ? '✅' : s.status === 'paused' ? '⏸️' : '📝';
         out += `${icon} **${s.name}**\n`;
         out += `   List: ${s.list_name || '(none)'}\n`;
-        
-        // Enhanced trigger display
         let triggerDisplay = s.trigger_type;
         if (s.trigger_type === 'tag' && s.trigger_value) {
           triggerDisplay = `tag: "${s.trigger_value}"`;
@@ -949,7 +924,6 @@ async function executeTool(name, args, env) {
           triggerDisplay = `${s.trigger_type} (${s.trigger_value})`;
         }
         out += `   Trigger: ${triggerDisplay}\n`;
-        
         out += `   Steps: ${s.step_count || 0} | Active: ${s.active_enrollments || 0}\n`;
         out += `   ID: ${s.id}\n\n`;
       }
@@ -976,8 +950,6 @@ async function executeTool(name, args, env) {
       out += `**ID:** ${s.id}\n`;
       out += `**Status:** ${s.status}\n`;
       out += `**List:** ${s.list_name || '(none)'}\n`;
-      
-      // Enhanced trigger display
       let triggerDisplay = s.trigger_type;
       if (s.trigger_type === 'tag' && s.trigger_value) {
         triggerDisplay = `tag: "${s.trigger_value}"`;
@@ -985,7 +957,6 @@ async function executeTool(name, args, env) {
         triggerDisplay = `${s.trigger_type} (${s.trigger_value})`;
       }
       out += `**Trigger:** ${triggerDisplay}\n`;
-      
       if (s.description) out += `**Description:** ${s.description}\n`;
       out += `\n**Enrollments:**\n`;
       out += `• Total: ${stats?.total || 0}\n`;
@@ -1059,8 +1030,6 @@ async function executeTool(name, args, env) {
     case "courier_add_sequence_step": {
       const id = generateId();
       const now = new Date().toISOString();
-      
-      // Get next position
       const last = await db.prepare('SELECT MAX(position) as pos FROM sequence_steps WHERE sequence_id = ?').bind(args.sequence_id).first();
       const position = (last?.pos || 0) + 1;
       
@@ -1196,17 +1165,13 @@ async function executeTool(name, args, env) {
     
     // ==================== STATS ====================
     case "courier_stats": {
-      // Lead counts
       const totalLeads = await db.prepare('SELECT COUNT(*) as c FROM leads').first();
       const todayLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE date(created_at) = date('now')").first();
       const weekLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-7 days')").first();
       const monthLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-30 days')").first();
-      
-      // Subscription stats
       const activeSubs = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'active'").first();
       const unsubscribed = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'unsubscribed'").first();
       
-      // Email performance (last 30 days)
       const emailStats = await db.prepare(`
         SELECT 
           COUNT(*) as total_sends,
@@ -1217,7 +1182,6 @@ async function executeTool(name, args, env) {
         WHERE created_at > datetime('now', '-30 days')
       `).first();
       
-      // Campaign counts
       const campaigns = await db.prepare(`
         SELECT 
           COUNT(*) as total,
@@ -1227,7 +1191,6 @@ async function executeTool(name, args, env) {
         FROM emails
       `).first();
       
-      // Sequence stats
       const sequences = await db.prepare(`
         SELECT 
           COUNT(*) as total,
@@ -1237,41 +1200,33 @@ async function executeTool(name, args, env) {
       `).first();
       
       const activeEnrollments = await db.prepare("SELECT COUNT(*) as c FROM sequence_enrollments WHERE status = 'active'").first();
-      
-      // List count
       const lists = await db.prepare("SELECT COUNT(*) as c FROM lists WHERE status != 'archived'").first();
       
-      // Calculate rates
       const sent = emailStats?.total_sends || 0;
       const opens = emailStats?.opens || 0;
       const clicks = emailStats?.clicks || 0;
       const bounces = emailStats?.bounces || 0;
       
       let out = `📊 **Courier Platform Stats**\n\n`;
-      
       out += `**📧 Lists & Subscribers**\n`;
       out += `• Lists: ${lists?.c || 0}\n`;
       out += `• Active Subscriptions: ${activeSubs?.c || 0}\n`;
       out += `• Unsubscribed: ${unsubscribed?.c || 0}\n`;
       out += `• Total Leads: ${totalLeads?.c || 0}\n`;
-      
       out += `\n**📈 Lead Growth**\n`;
       out += `• Today: +${todayLeads?.c || 0}\n`;
       out += `• This Week: +${weekLeads?.c || 0}\n`;
       out += `• This Month: +${monthLeads?.c || 0}\n`;
-      
       out += `\n**📨 Campaigns**\n`;
       out += `• Total: ${campaigns?.total || 0}\n`;
       out += `• Drafts: ${campaigns?.drafts || 0}\n`;
       out += `• Scheduled: ${campaigns?.scheduled || 0}\n`;
       out += `• Sent: ${campaigns?.sent || 0}\n`;
-      
       out += `\n**🔄 Sequences**\n`;
       out += `• Total: ${sequences?.total || 0}\n`;
       out += `• Active: ${sequences?.active || 0}\n`;
       out += `• Drafts: ${sequences?.drafts || 0}\n`;
       out += `• Active Enrollments: ${activeEnrollments?.c || 0}\n`;
-      
       out += `\n**📬 Email Performance (Last 30 Days)**\n`;
       out += `• Emails Sent: ${sent}\n`;
       out += `• Opens: ${opens} (${sent ? Math.round(opens/sent*100) : 0}%)\n`;
@@ -1289,28 +1244,35 @@ async function executeTool(name, args, env) {
   }
 }
 
-// MCP Protocol Handler
+// MCP Protocol Handler - SSE with long-polling style
 export async function handleMCP(request, env) {
   const url = new URL(request.url);
   
-  // SSE endpoint for MCP - establishes connection and sends endpoint info
+  // SSE endpoint for MCP - keep connection open
   if (request.method === 'GET') {
     const encoder = new TextEncoder();
     const messageEndpoint = `${url.origin}/sse`;
     
-    // Create a readable stream that sends the endpoint message then closes
+    let intervalId;
+    
     const stream = new ReadableStream({
       start(controller) {
-        // Send the endpoint message
-        const endpointMessage = `data: ${JSON.stringify({ 
-          jsonrpc: '2.0', 
-          method: 'endpoint', 
-          params: { url: messageEndpoint } 
-        })}\n\n`;
+        // Send the endpoint message immediately
+        const endpointMessage = `event: endpoint\ndata: ${JSON.stringify({ url: messageEndpoint })}\n\n`;
         controller.enqueue(encoder.encode(endpointMessage));
         
-        // Close the stream after sending
-        controller.close();
+        // Send keepalive pings every 15 seconds to keep connection open
+        intervalId = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(': keepalive\n\n'));
+          } catch (e) {
+            // Stream closed
+            clearInterval(intervalId);
+          }
+        }, 15000);
+      },
+      cancel() {
+        if (intervalId) clearInterval(intervalId);
       }
     });
     
@@ -1320,6 +1282,8 @@ export async function handleMCP(request, env) {
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
       }
     });
   }
