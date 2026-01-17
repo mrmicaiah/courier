@@ -72,6 +72,7 @@
     .btn-primary { background: var(--blue-600); border-color: var(--blue-700); color: white; }
     .btn-primary:hover { background: var(--blue-700); }
     .btn-sm { padding: 8px 14px; font-size: 0.8rem; }
+    .btn-xs { padding: 4px 8px; font-size: 0.75rem; }
     .btn-danger { color: var(--red-600); border-color: var(--red-500); }
     .btn-danger:hover:not(:disabled) { background: var(--red-500); color: white; }
     .select-styled { padding: 8px 12px; border: 2px solid var(--gray-400); border-radius: 8px; font-size: 0.875rem; font-family: inherit; background: var(--white); min-width: 150px; }
@@ -107,10 +108,23 @@
     .campaign-group table { min-width: auto; }
     .campaign-group th, .campaign-group td { padding: 12px 20px; }
     
+    /* Sequence Steps */
+    .step-list { margin: 0; padding: 0; list-style: none; }
+    .step-item { border: 2px solid var(--gray-300); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+    .step-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--gray-50); cursor: pointer; }
+    .step-header:hover { background: var(--gray-100); }
+    .step-header h4 { font-size: 0.9rem; font-weight: 600; margin: 0; }
+    .step-meta { font-size: 0.8rem; color: var(--gray-500); }
+    .step-body { display: none; padding: 16px; border-top: 2px solid var(--gray-300); background: var(--white); }
+    .step-item.expanded .step-body { display: block; }
+    .step-content { background: var(--gray-50); border: 1px solid var(--gray-300); border-radius: 6px; padding: 16px; font-size: 0.875rem; max-height: 300px; overflow-y: auto; }
+    .step-content-html { all: revert; }
+    .step-content-html * { all: revert; }
+    
     /* Modal */
     .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
     .modal-overlay.active { display: flex; }
-    .modal { background: var(--white); border: 2px solid var(--gray-400); border-radius: 14px; max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; }
+    .modal { background: var(--white); border: 2px solid var(--gray-400); border-radius: 14px; max-width: 700px; width: 100%; max-height: 90vh; overflow-y: auto; }
     .modal-header { padding: 20px; border-bottom: 2px solid var(--gray-300); display: flex; justify-content: space-between; align-items: center; }
     .modal-header h3 { font-size: 1.1rem; font-weight: 700; }
     .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--gray-500); }
@@ -131,6 +145,7 @@
     code { background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
     .selection-info { font-size: 0.875rem; color: var(--gray-600); padding: 8px 0; }
     .muted { color: var(--gray-500); }
+    .text-right { text-align: right; }
   </style>
 </head>
 <body>
@@ -193,8 +208,8 @@
           </div>
           <div class="card-body">
             <table>
-              <thead><tr><th>Name</th><th>Slug</th><th>Subscribers</th><th>Status</th></tr></thead>
-              <tbody id="listsTable"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
+              <thead><tr><th>Name</th><th>Slug</th><th>Subscribers</th><th>Status</th><th class="text-right">Actions</th></tr></thead>
+              <tbody id="listsTable"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -302,6 +317,7 @@
     let currentSubscribers = [];
     let selectedSubscribers = new Set();
     let allCampaigns = [];
+    let allSequences = [];
 
     // Check for saved session
     const savedKey = sessionStorage.getItem('courier_key');
@@ -476,7 +492,6 @@
       
       // Try to get email send stats
       try {
-        // Load a few sent campaigns and aggregate their stats
         const sentCampaigns = allCampaigns.filter(c => c.status === 'sent').slice(0, 10);
         for (const campaign of sentCampaigns) {
           try {
@@ -491,13 +506,11 @@
       } catch (e) {}
       
       // Get sequence stats
-      try {
-        const seqData = await api('/api/sequences');
-        const seqs = seqData.sequences || [];
-        sequenceStats.total = seqs.length;
-        sequenceStats.active = seqs.filter(s => s.status === 'active').length;
-        sequenceStats.enrollments = seqs.reduce((sum, s) => sum + (s.active_enrollments || 0), 0);
-      } catch (e) {}
+      if (allSequences.length > 0) {
+        sequenceStats.total = allSequences.length;
+        sequenceStats.active = allSequences.filter(s => s.status === 'active').length;
+        sequenceStats.enrollments = allSequences.reduce((sum, s) => sum + (s.active_enrollments || 0), 0);
+      }
       
       const openRate = emailStats.sent > 0 ? Math.round(emailStats.opened / emailStats.sent * 100) : 0;
       const clickRate = emailStats.sent > 0 ? Math.round(emailStats.clicked / emailStats.sent * 100) : 0;
@@ -591,7 +604,7 @@
         currentLists.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
       
       if (!currentLists.length) {
-        document.getElementById('listsTable').innerHTML = '<tr><td colspan="4" class="empty-state">No lists yet</td></tr>';
+        document.getElementById('listsTable').innerHTML = '<tr><td colspan="5" class="empty-state">No lists yet</td></tr>';
         return;
       }
       
@@ -601,8 +614,43 @@
           <td><code>${escapeHtml(list.slug)}</code></td>
           <td><span class="clickable" onclick="viewListSubscribers('${list.id}')">${list.subscriber_count || 0}</span></td>
           <td><span class="badge badge-${list.status}">${list.status}</span></td>
+          <td class="text-right">
+            <button class="btn btn-xs btn-danger" onclick="deleteList('${list.id}', '${escapeHtml(list.name)}', ${list.subscriber_count || 0})">🗑️ Delete</button>
+          </td>
         </tr>
       `).join('');
+    }
+
+    // Delete List
+    async function deleteList(listId, listName, subscriberCount) {
+      let confirmMsg;
+      let forceDelete = false;
+      
+      if (subscriberCount > 0) {
+        confirmMsg = `⚠️ "${listName}" has ${subscriberCount} subscriber(s).\n\nDeleting will:\n- Remove all subscribers from this list\n- Delete all sequences on this list\n- Unlink campaigns (campaigns are preserved)\n\nAre you sure you want to delete this list?`;
+        forceDelete = true;
+      } else {
+        confirmMsg = `Delete list "${listName}"? This cannot be undone.`;
+      }
+      
+      if (!window.confirm(confirmMsg)) return;
+      
+      try {
+        const endpoint = forceDelete ? `/api/lists/${listId}?force=true` : `/api/lists/${listId}`;
+        const result = await api(endpoint, 'DELETE');
+        
+        if (result.error) {
+          showToast(result.error, 'error');
+          return;
+        }
+        
+        showToast(`List "${listName}" deleted`, 'success');
+        await loadLists();
+        await loadStats();
+      } catch (err) {
+        showToast('Failed to delete list', 'error');
+        console.error(err);
+      }
     }
 
     // Load Subscribers
@@ -626,16 +674,13 @@
         return;
       }
       
-      // Get list names for display
       const listMap = {};
       currentLists.forEach(l => listMap[l.id] = l.name);
       
       document.getElementById('subscribersTable').innerHTML = currentSubscribers.slice(0, 200).map(sub => {
-        // Use subscription_id if available, otherwise fall back to lead_id
         const subId = sub.subscription_id || sub.lead_id;
         const listName = sub.list_name || listMap[sub.list_id] || '-';
         
-        // Parse tags
         let tagsHtml = '-';
         if (sub.tags) {
           try {
@@ -725,13 +770,10 @@
       
       try {
         const ids = Array.from(selectedSubscribers);
-        // Send as lead_ids for permanent deletion
         const result = await api('/api/subscribers/delete', 'POST', { 
           lead_ids: ids,
           permanent: true 
         });
-        
-        console.log('Delete result:', result);
         
         showToast(`Deleted ${result.deleted || count} subscriber(s)`, 'success');
         selectedSubscribers.clear();
@@ -746,10 +788,11 @@
       updateDeleteButton();
     }
 
-    // Load Sequences - Enhanced with trigger display
+    // Load Sequences - Enhanced with clickable names
     async function loadSequences() {
       const data = await api('/api/sequences');
       const seqs = data.sequences || [];
+      allSequences = seqs;
       
       if (!seqs.length) {
         document.getElementById('sequencesTable').innerHTML = '<tr><td colspan="6" class="empty-state">No sequences</td></tr>';
@@ -757,7 +800,6 @@
       }
       
       document.getElementById('sequencesTable').innerHTML = seqs.map(seq => {
-        // Format trigger display
         let triggerHtml = seq.trigger_type;
         if (seq.trigger_type === 'tag' && seq.trigger_value) {
           triggerHtml = `<span class="tag trigger">tag: ${escapeHtml(seq.trigger_value)}</span>`;
@@ -769,15 +811,89 @@
         
         return `
           <tr>
-            <td><strong>${escapeHtml(seq.name)}</strong></td>
+            <td><strong class="clickable" onclick="viewSequence('${seq.id}')">${escapeHtml(seq.name)}</strong></td>
             <td>${escapeHtml(seq.list_name || '-')}</td>
             <td>${triggerHtml}</td>
-            <td>${seq.step_count || 0}</td>
+            <td><span class="clickable" onclick="viewSequence('${seq.id}')">${seq.step_count || 0} steps</span></td>
             <td>${seq.active_enrollments || 0}</td>
             <td><span class="badge badge-${seq.status}">${seq.status}</span></td>
           </tr>
         `;
       }).join('');
+    }
+
+    // View Sequence Steps
+    async function viewSequence(sequenceId) {
+      openModal('Loading...', '<div class="loading">Loading sequence...</div>');
+      
+      try {
+        const data = await api(`/api/sequences/${sequenceId}`);
+        const seq = data.sequence;
+        const steps = data.steps || [];
+        
+        let triggerHtml = seq.trigger_type;
+        if (seq.trigger_type === 'tag' && seq.trigger_value) {
+          triggerHtml = `<span class="tag trigger">tag: ${seq.trigger_value}</span>`;
+        } else if (seq.trigger_type === 'subscribe') {
+          triggerHtml = 'On subscribe';
+        }
+        
+        let stepsHtml = '';
+        if (steps.length === 0) {
+          stepsHtml = '<p class="muted">No steps in this sequence yet.</p>';
+        } else {
+          stepsHtml = `<ul class="step-list">`;
+          steps.forEach((step, index) => {
+            const delayText = formatDelay(step.delay_minutes);
+            stepsHtml += `
+              <li class="step-item" id="step-${step.id}">
+                <div class="step-header" onclick="toggleStep('${step.id}')">
+                  <h4>Step ${index + 1}: ${escapeHtml(step.subject)}</h4>
+                  <span class="step-meta">${delayText} • <span class="badge badge-${step.status}">${step.status}</span></span>
+                </div>
+                <div class="step-body">
+                  <p style="margin-bottom: 12px;"><strong>Subject:</strong> ${escapeHtml(step.subject)}</p>
+                  ${step.preview_text ? `<p style="margin-bottom: 12px;"><strong>Preview:</strong> ${escapeHtml(step.preview_text)}</p>` : ''}
+                  <p style="margin-bottom: 8px;"><strong>Content:</strong></p>
+                  <div class="step-content">
+                    <div class="step-content-html">${step.body_html || '<em>No content</em>'}</div>
+                  </div>
+                </div>
+              </li>
+            `;
+          });
+          stepsHtml += `</ul>`;
+        }
+        
+        const content = `
+          <p style="margin-bottom: 16px;">
+            <strong>List:</strong> ${escapeHtml(seq.list_name || 'Unknown')}<br>
+            <strong>Trigger:</strong> ${triggerHtml}<br>
+            <strong>Status:</strong> <span class="badge badge-${seq.status}">${seq.status}</span><br>
+            <strong>Active Enrollments:</strong> ${seq.active_enrollments || 0}
+          </p>
+          <h4 style="margin-bottom: 12px;">Steps (${steps.length})</h4>
+          ${stepsHtml}
+        `;
+        
+        document.getElementById('modalTitle').textContent = seq.name;
+        document.getElementById('modalContent').innerHTML = content;
+      } catch (err) {
+        document.getElementById('modalContent').innerHTML = '<p class="error">Failed to load sequence</p>';
+        console.error(err);
+      }
+    }
+
+    function toggleStep(stepId) {
+      document.getElementById(`step-${stepId}`).classList.toggle('expanded');
+    }
+
+    function formatDelay(minutes) {
+      if (!minutes || minutes === 0) return 'Immediately';
+      if (minutes < 60) return `${minutes} min`;
+      if (minutes < 1440) return `${Math.round(minutes / 60)} hours`;
+      const days = Math.round(minutes / 1440);
+      return days === 1 ? '1 day' : `${days} days`;
     }
 
     // Load Templates
@@ -810,7 +926,6 @@
         return;
       }
       
-      // Group campaigns by list
       const groups = {};
       const noListKey = '__no_list__';
       
@@ -832,7 +947,6 @@
         else if (email.status === 'sent') groups[key].sent++;
       });
       
-      // Sort groups: lists with most campaigns first, no-list at the end
       const sortedGroups = Object.values(groups).sort((a, b) => {
         if (a.listId === null) return 1;
         if (b.listId === null) return -1;
