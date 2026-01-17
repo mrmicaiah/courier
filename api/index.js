@@ -7,7 +7,7 @@ import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js'
 
 // Handler imports
 import { handleTrackOpen, handleTrackClick, handlePublicUnsubscribe } from './handlers-tracking.js';
-import { handleGetLists, handleCreateList, handleGetList, handleUpdateList, handleArchiveList, handleListStats } from './handlers-lists.js';
+import { handleGetLists, handleCreateList, handleGetList, handleUpdateList, handleArchiveList, handleDeleteList, handleListStats } from './handlers-lists.js';
 import { handleGetListSubscribers, handleAddSubscriber, handleRemoveSubscriber, handleDeleteSubscribers, handleExportListSubscribers, handleImportSubscribers, handleGetSubscribers, handleGetSubscriber, handleUnsubscribeLead } from './handlers-subscribers.js';
 import { handleGetSequences, handleCreateSequence, handleGetSequence, handleUpdateSequence, handleDeleteSequence, handleGetSequenceSteps, handleAddSequenceStep, handleUpdateSequenceStep, handleDeleteSequenceStep, handleReorderSequenceSteps, handleEnrollInSequence, handleGetSequenceEnrollments } from './handlers-sequences.js';
 import { handleGetEmails, handleCreateEmail, handleGetEmail, handleUpdateEmail, handleDeleteEmail, handleDuplicateEmail, handlePreviewEmail, handleScheduleEmail, handleCancelSchedule, handleSendTestEmail, handleSendEmail, handleEmailStats } from './handlers-emails.js';
@@ -230,7 +230,10 @@ export default {
       return handleUpdateList(url.pathname.split('/').pop(), request, env);
     }
     if (url.pathname.match(/^\/api\/lists\/[a-zA-Z0-9-]+$/) && request.method === 'DELETE') {
-      return handleArchiveList(url.pathname.split('/').pop(), env);
+      return handleDeleteList(url.pathname.split('/').pop(), request, env);
+    }
+    if (url.pathname.match(/^\/api\/lists\/[a-zA-Z0-9-]+\/archive$/) && request.method === 'POST') {
+      return handleArchiveList(url.pathname.split('/')[3], env);
     }
     if (url.pathname.match(/^\/api\/lists\/[a-zA-Z0-9-]+\/stats$/) && request.method === 'GET') {
       return handleListStats(url.pathname.split('/')[3], env);
