@@ -5,6 +5,34 @@
 import { generateId, generateSlug, jsonResponse, isValidEmail, isDisposableEmail, sanitizeString, sendEmailViaSES } from './lib.js';
 import { enrollInSequence } from './handlers-sequences.js';
 
+/**
+ * Enroll a subscription in sequences that match any of the provided tags
+ * Finds sequences where trigger_type='tag' and trigger_value matches a tag
+ */
+async function enrollByTags(env, subscriptionId, listId, tags) {
+  if (!tags || !Array.isArray(tags) || tags.length === 0) return;
+  
+  try {
+    // Find all active tag-triggered sequences for this list
+    const sequences = await env.DB.prepare(`
+      SELECT id, trigger_value FROM sequences 
+      WHERE list_id = ? AND trigger_type = 'tag' AND status = 'active'
+    `).bind(listId).all();
+    
+    if (!sequences.results || sequences.results.length === 0) return;
+    
+    // Check each sequence's trigger_value against the tags
+    for (const sequence of sequences.results) {
+      if (tags.includes(sequence.trigger_value)) {
+        console.log(`Tag match: enrolling in sequence ${sequence.id} (tag: ${sequence.trigger_value})`);
+        await enrollInSequence(env, subscriptionId, sequence.id);
+      }
+    }
+  } catch (error) {
+    console.error('enrollByTags error:', error);
+  }
+}
+
 async function sendLeadNotification(env, list, lead, subscription) {
   if (!list.notify_email) return;
   
@@ -129,6 +157,9 @@ export async function handleSubscribe(request, env) {
     const metadataObj = { ...(data.metadata || {}), ...formFields };
     const metadataJson = Object.keys(metadataObj).length > 0 ? JSON.stringify(metadataObj) : null;
     
+    // Parse tags for use later
+    const tagsArray = Array.isArray(data.tags) ? data.tags.slice(0, 20).map(t => sanitizeString(t, 30)) : [];
+    
     if (!lead) {
       isNewLead = true;
       const result = await env.DB.prepare(`
@@ -140,7 +171,7 @@ export async function handleSubscribe(request, env) {
         sanitizeString(data.source, 50) || listSlug,
         sanitizeString(data.funnel, 50),
         sanitizeString(data.segment, 50),
-        Array.isArray(data.tags) ? JSON.stringify(data.tags.slice(0, 20).map(t => sanitizeString(t, 30))) : null,
+        tagsArray.length > 0 ? JSON.stringify(tagsArray) : null,
         metadataJson,
         request.cf?.country || null,
         now,
@@ -161,12 +192,14 @@ export async function handleSubscribe(request, env) {
       await env.DB.prepare(`
         UPDATE leads SET
           name = COALESCE(?, name),
+          segment = COALESCE(?, segment),
           tags = ?,
           metadata = ?,
           updated_at = ?
         WHERE id = ?
       `).bind(
-        leadName || null, 
+        leadName || null,
+        sanitizeString(data.segment, 50) || null,
         JSON.stringify(mergedTags), 
         Object.keys(mergedMetadata).length > 0 ? JSON.stringify(mergedMetadata) : null,
         now, 
@@ -215,8 +248,15 @@ export async function handleSubscribe(request, env) {
       
       subscription = { id: subscriptionId, source, funnel };
       
+      // Welcome sequence (subscribe trigger)
       if (list.welcome_sequence_id) {
         await enrollInSequence(env, subscriptionId, list.welcome_sequence_id);
+      }
+      
+      // Tag-based sequence enrollment
+      const leadTags = lead.tags ? JSON.parse(lead.tags) : [];
+      if (leadTags.length > 0) {
+        await enrollByTags(env, subscriptionId, list.id, leadTags);
       }
       
       if (list.notify_email) {
@@ -267,6 +307,8 @@ export async function handleLeadCapture(request, env) {
       return jsonResponse({ error: 'Please use a valid email address' }, 400);
     }
 
+    const tagsArray = Array.isArray(data.tags) ? data.tags.slice(0, 20).map(t => sanitizeString(t, 30)) : [];
+
     const lead = {
       email: email,
       name: sanitizeString(data.name, 100),
@@ -274,7 +316,7 @@ export async function handleLeadCapture(request, env) {
       funnel: sanitizeString(data.funnel, 50),
       segment: sanitizeString(data.segment, 50),
       quiz_result: data.quiz_result ? JSON.stringify(data.quiz_result).slice(0, 5000) : null,
-      tags: Array.isArray(data.tags) ? JSON.stringify(data.tags.slice(0, 20).map(t => sanitizeString(t, 30))) : null,
+      tags: tagsArray.length > 0 ? JSON.stringify(tagsArray) : null,
       metadata: data.metadata ? JSON.stringify(data.metadata).slice(0, 2000) : null,
       ip_country: request.cf?.country || null,
       created_at: new Date().toISOString(),
@@ -286,13 +328,14 @@ export async function handleLeadCapture(request, env) {
 
     let leadId;
     let isNew = false;
+    let mergedTags = tagsArray;
 
     if (existing) {
       leadId = existing.id;
       
       const existingTags = existing.tags ? JSON.parse(existing.tags) : [];
       const newTags = data.tags || [];
-      const mergedTags = [...new Set([...existingTags, ...newTags])].slice(0, 50);
+      mergedTags = [...new Set([...existingTags, ...newTags])].slice(0, 50);
       
       await env.DB.prepare(`
         UPDATE leads 
@@ -343,6 +386,11 @@ export async function handleLeadCapture(request, env) {
           INSERT OR IGNORE INTO subscriptions (id, lead_id, list_id, status, source, funnel, subscribed_at, created_at)
           VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
         `).bind(subId, leadId, defaultList.id, lead.source, lead.funnel, lead.created_at, lead.created_at).run();
+        
+        // Tag-based sequence enrollment for lead capture
+        if (tagsArray.length > 0) {
+          await enrollByTags(env, subId, defaultList.id, tagsArray);
+        }
         
         if (defaultList.notify_email) {
           const fullLead = await env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(leadId).first();
