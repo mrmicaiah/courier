@@ -20,6 +20,9 @@ import { handleMCP } from './mcp.js';
 const MTC_PASSWORD = 'contractors2026';
 const MTC_ALLOWED_LISTS = ['meet-the-contractors-vendors', 'meet-the-contractors-coordinators'];
 
+// Dashboard PIN codes
+const DASHBOARD_PINS = ['1976', '1987'];
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -68,6 +71,24 @@ export default {
     }
     if (url.pathname === '/unsubscribe') {
       return handlePublicUnsubscribe(request, env);
+    }
+
+    // === DASHBOARD LOGIN ===
+    if (url.pathname === '/api/dashboard/login' && request.method === 'POST') {
+      try {
+        const data = await request.json();
+        const pin = String(data.pin || '').trim();
+        
+        if (DASHBOARD_PINS.includes(pin)) {
+          return jsonResponse({ 
+            success: true, 
+            token: env.ADMIN_API_KEY 
+          }, 200, request);
+        }
+        return jsonResponse({ error: 'Invalid PIN' }, 401, request);
+      } catch {
+        return jsonResponse({ error: 'Invalid request' }, 400, request);
+      }
     }
 
     // === MEET THE CONTRACTORS DASHBOARD ===
