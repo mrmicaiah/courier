@@ -204,6 +204,96 @@ export async function handleArchiveList(id, env) {
   return jsonResponse({ success: true, message: 'List archived' });
 }
 
+export async function handleDeleteList(id, request, env) {
+  const list = await env.DB.prepare('SELECT * FROM lists WHERE id = ?').bind(id).first();
+  if (!list) {
+    return jsonResponse({ error: 'List not found' }, 404);
+  }
+  
+  // Check for active subscribers
+  const activeSubs = await env.DB.prepare(
+    'SELECT COUNT(*) as count FROM subscriptions WHERE list_id = ? AND status = ?'
+  ).bind(id, 'active').first();
+  
+  // Check for sequences
+  const sequences = await env.DB.prepare(
+    'SELECT COUNT(*) as count FROM sequences WHERE list_id = ?'
+  ).bind(id).first();
+  
+  // Check for campaigns
+  const campaigns = await env.DB.prepare(
+    'SELECT COUNT(*) as count FROM emails WHERE list_id = ?'
+  ).bind(id).first();
+  
+  // Allow force delete via query param or request body
+  const url = new URL(request.url);
+  const forceDelete = url.searchParams.get('force') === 'true';
+  
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {}
+  
+  const force = forceDelete || body.force === true;
+  
+  // If there are active subscribers and not forcing, return error with details
+  if (activeSubs?.count > 0 && !force) {
+    return jsonResponse({ 
+      error: 'Cannot delete list with active subscribers',
+      details: {
+        active_subscribers: activeSubs.count,
+        sequences: sequences?.count || 0,
+        campaigns: campaigns?.count || 0
+      },
+      hint: 'Add ?force=true or { "force": true } to delete anyway. This will unsubscribe all users from this list.'
+    }, 400);
+  }
+  
+  // If forcing or no active subscribers, proceed with deletion
+  try {
+    // Delete sequence enrollments for sequences on this list
+    await env.DB.prepare(`
+      DELETE FROM sequence_enrollments 
+      WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
+    `).bind(id).run();
+    
+    // Delete sequence steps for sequences on this list  
+    await env.DB.prepare(`
+      DELETE FROM sequence_steps 
+      WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
+    `).bind(id).run();
+    
+    // Delete sequences on this list
+    await env.DB.prepare('DELETE FROM sequences WHERE list_id = ?').bind(id).run();
+    
+    // Delete subscriptions (this unsubscribes everyone from the list)
+    await env.DB.prepare('DELETE FROM subscriptions WHERE list_id = ?').bind(id).run();
+    
+    // Unlink campaigns from list (keep campaigns but remove list association)
+    await env.DB.prepare('UPDATE emails SET list_id = NULL WHERE list_id = ?').bind(id).run();
+    
+    // Unlink templates from list
+    await env.DB.prepare('UPDATE templates SET list_id = NULL WHERE list_id = ?').bind(id).run();
+    
+    // Delete the list
+    await env.DB.prepare('DELETE FROM lists WHERE id = ?').bind(id).run();
+    
+    return jsonResponse({ 
+      success: true, 
+      message: 'List deleted',
+      deleted: {
+        list: list.name,
+        subscribers_removed: activeSubs?.count || 0,
+        sequences_deleted: sequences?.count || 0,
+        campaigns_unlinked: campaigns?.count || 0
+      }
+    });
+  } catch (error) {
+    console.error('Delete list error:', error);
+    return jsonResponse({ error: 'Failed to delete list: ' + error.message }, 500);
+  }
+}
+
 export async function handleListStats(id, env) {
   const list = await env.DB.prepare('SELECT * FROM lists WHERE id = ?').bind(id).first();
   if (!list) {
