@@ -502,11 +502,12 @@
       currentLists.forEach(l => listMap[l.id] = l.name);
       
       document.getElementById('subscribersTable').innerHTML = currentSubscribers.slice(0, 200).map(sub => {
-        const subId = sub.subscription_id || sub.id;
+        // Use subscription_id if available, otherwise fall back to lead_id
+        const subId = sub.subscription_id || sub.lead_id;
         const listName = sub.list_name || listMap[sub.list_id] || '-';
         return `
-          <tr data-id="${subId}" class="${selectedSubscribers.has(subId) ? 'selected' : ''}">
-            <td><input type="checkbox" class="checkbox sub-check" data-id="${subId}" onchange="toggleSubscriber('${subId}')" ${selectedSubscribers.has(subId) ? 'checked' : ''}></td>
+          <tr data-id="${subId}" class="${selectedSubscribers.has(String(subId)) ? 'selected' : ''}">
+            <td><input type="checkbox" class="checkbox sub-check" data-id="${subId}" onchange="toggleSubscriber('${subId}')" ${selectedSubscribers.has(String(subId)) ? 'checked' : ''}></td>
             <td>${escapeHtml(sub.email)}</td>
             <td>${escapeHtml(sub.name || '-')}</td>
             <td>${escapeHtml(listName)}</td>
@@ -519,6 +520,7 @@
 
     // Selection handling
     function toggleSubscriber(id) {
+      id = String(id);
       if (selectedSubscribers.has(id)) {
         selectedSubscribers.delete(id);
       } else {
@@ -537,7 +539,7 @@
       const checkboxes = document.querySelectorAll('.sub-check');
       
       checkboxes.forEach(cb => {
-        const id = cb.dataset.id;
+        const id = String(cb.dataset.id);
         if (selectAll) {
           selectedSubscribers.add(id);
         } else {
@@ -570,8 +572,8 @@
       const count = selectedSubscribers.size;
       if (count === 0) return;
       
-      const confirm = window.confirm(`Are you sure you want to delete ${count} subscriber(s)? This cannot be undone.`);
-      if (!confirm) return;
+      const confirmMsg = `Are you sure you want to permanently delete ${count} subscriber(s)? This cannot be undone.`;
+      if (!window.confirm(confirmMsg)) return;
       
       const btn = document.getElementById('deleteSelectedBtn');
       btn.disabled = true;
@@ -579,9 +581,15 @@
       
       try {
         const ids = Array.from(selectedSubscribers);
-        await api('/api/subscribers/delete', 'POST', { subscription_ids: ids });
+        // Send as lead_ids for permanent deletion
+        const result = await api('/api/subscribers/delete', 'POST', { 
+          lead_ids: ids,
+          permanent: true 
+        });
         
-        showToast(`Deleted ${count} subscriber(s)`, 'success');
+        console.log('Delete result:', result);
+        
+        showToast(`Deleted ${result.deleted || count} subscriber(s)`, 'success');
         selectedSubscribers.clear();
         await loadSubscribers();
         await loadLists();
