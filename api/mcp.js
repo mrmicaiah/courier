@@ -1293,21 +1293,28 @@ async function executeTool(name, args, env) {
 export async function handleMCP(request, env) {
   const url = new URL(request.url);
   
-  // SSE endpoint for MCP
+  // SSE endpoint for MCP - establishes connection and sends endpoint info
   if (request.method === 'GET') {
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
     const encoder = new TextEncoder();
-    
-    const sendEvent = async (data) => {
-      await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-    };
-    
-    // Send initial endpoint message
     const messageEndpoint = `${url.origin}/sse`;
-    await sendEvent({ jsonrpc: '2.0', method: 'endpoint', params: { url: messageEndpoint } });
     
-    return new Response(readable, {
+    // Create a readable stream that sends the endpoint message then closes
+    const stream = new ReadableStream({
+      start(controller) {
+        // Send the endpoint message
+        const endpointMessage = `data: ${JSON.stringify({ 
+          jsonrpc: '2.0', 
+          method: 'endpoint', 
+          params: { url: messageEndpoint } 
+        })}\n\n`;
+        controller.enqueue(encoder.encode(endpointMessage));
+        
+        // Close the stream after sending
+        controller.close();
+      }
+    });
+    
+    return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
