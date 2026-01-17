@@ -840,7 +840,7 @@ async function executeTool(name, args, env) {
       out += `• Bounced: ${bounced} (${sent ? Math.round(bounced/sent*100) : 0}%)\n`;
       out += `\n**Engagement:**\n`;
       out += `• Opened: ${opened} (${sent ? Math.round(opened/sent*100) : 0}%)\n`;
-      out += `• Clicked: ${clicked} (${sent ? Math.round(clicks/sent*100) : 0}%)\n`;
+      out += `• Clicked: ${clicked} (${sent ? Math.round(clicked/sent*100) : 0}%)\n`;
       out += `• Click-to-Open: ${opened ? Math.round(clicked/opened*100) : 0}%\n`;
       
       if (topLinks.results?.length > 0) {
@@ -1244,11 +1244,42 @@ async function executeTool(name, args, env) {
   }
 }
 
-// MCP Protocol Handler - SSE with long-polling style
+// MCP Protocol Handler
 export async function handleMCP(request, env) {
   const url = new URL(request.url);
   
-  // SSE endpoint for MCP - keep connection open
+  // Debug endpoint - test MCP without SSE
+  if (url.searchParams.get('debug') === 'init') {
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        protocolVersion: '2024-11-05',
+        serverInfo: { name: 'courier', version: '1.0.0' },
+        capabilities: { tools: {} }
+      }
+    }), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      }
+    });
+  }
+  
+  if (url.searchParams.get('debug') === 'tools') {
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { tools: TOOLS }
+    }), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      }
+    });
+  }
+  
+  // SSE endpoint for MCP
   if (request.method === 'GET') {
     const encoder = new TextEncoder();
     const messageEndpoint = `${url.origin}/sse`;
