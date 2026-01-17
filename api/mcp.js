@@ -64,6 +64,18 @@ const TOOLS = [
       required: ["list_id"]
     }
   },
+  {
+    name: "courier_delete_list",
+    description: "Delete a list permanently. Cannot delete lists with active subscribers unless force=true",
+    inputSchema: {
+      type: "object",
+      properties: {
+        list_id: { type: "string", description: "List ID to delete" },
+        force: { type: "boolean", default: false, description: "Force delete even if list has subscribers (will unsubscribe them)" }
+      },
+      required: ["list_id"]
+    }
+  },
   // Templates
   {
     name: "courier_list_templates",
@@ -118,12 +130,14 @@ const TOOLS = [
   // Campaigns
   {
     name: "courier_list_campaigns",
-    description: "List email campaigns",
+    description: "List email campaigns with optional filtering and pagination",
     inputSchema: {
       type: "object",
       properties: {
         status: { type: "string", enum: ["draft", "scheduled", "sent"] },
-        list_id: { type: "string" }
+        list_id: { type: "string" },
+        limit: { type: "number", default: 20, description: "Max results (default 20, max 100)" },
+        offset: { type: "number", default: 0, description: "Skip this many results for pagination" }
       },
       required: []
     }
@@ -166,6 +180,17 @@ const TOOLS = [
         list_id: { type: "string" },
         title: { type: "string" },
         preview_text: { type: "string" }
+      },
+      required: ["campaign_id"]
+    }
+  },
+  {
+    name: "courier_delete_campaign",
+    description: "Delete a draft campaign (cannot delete sent campaigns)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        campaign_id: { type: "string" }
       },
       required: ["campaign_id"]
     }
@@ -283,7 +308,7 @@ const TOOLS = [
         list_id: { type: "string" },
         description: { type: "string" },
         trigger_type: { type: "string", enum: ["subscribe", "manual", "tag"], default: "subscribe" },
-        trigger_value: { type: "string" }
+        trigger_value: { type: "string", description: "For tag triggers, the tag name that triggers this sequence" }
       },
       required: ["name", "list_id"]
     }
@@ -425,7 +450,7 @@ const TOOLS = [
   // Stats
   {
     name: "courier_stats",
-    description: "Get overall platform statistics",
+    description: "Get overall platform statistics including opens, clicks, unsubscribes, and performance metrics",
     inputSchema: { type: "object", properties: {}, required: [] }
   }
 ];
@@ -439,6 +464,7 @@ async function executeTool(name, args, env) {
     case "courier_list_lists": {
       const results = await db.prepare(`
         SELECT l.*, 
+          (SELECT COUNT(*) FROM subscriptions s WHERE s.list_id = l.id AND s.status = 'active') as subscriber_count,
           ct.name as campaign_template_name,
           st.name as sequence_template_name
         FROM lists l
@@ -451,7 +477,7 @@ async function executeTool(name, args, env) {
       
       let out = `📋 **Email Lists** (${results.results.length})\n\n`;
       for (const l of results.results) {
-        out += `• **${l.name}**${l.status !== 'active' ? ` [${l.status}]` : ''}\n`;
+        out += `• **${l.name}**${l.status !== 'active' ? ` [${l.status}]` : ''} (${l.subscriber_count || 0} subscribers)\n`;
         out += `  Slug: ${l.slug}\n`;
         out += `  From: ${l.from_name} <${l.from_email}>\n`;
         if (l.notify_email) out += `  📬 Notifications: ${l.notify_email}\n`;
@@ -554,6 +580,65 @@ async function executeTool(name, args, env) {
       return msg;
     }
     
+    case "courier_delete_list": {
+      const l = await db.prepare('SELECT * FROM lists WHERE id = ?').bind(args.list_id).first();
+      if (!l) return "⛔ List not found";
+      
+      const activeSubs = await db.prepare(
+        'SELECT COUNT(*) as count FROM subscriptions WHERE list_id = ? AND status = ?'
+      ).bind(args.list_id, 'active').first();
+      
+      const sequences = await db.prepare(
+        'SELECT COUNT(*) as count FROM sequences WHERE list_id = ?'
+      ).bind(args.list_id).first();
+      
+      const campaigns = await db.prepare(
+        'SELECT COUNT(*) as count FROM emails WHERE list_id = ?'
+      ).bind(args.list_id).first();
+      
+      if (activeSubs?.count > 0 && !args.force) {
+        return `⛔ Cannot delete list "${l.name}" - it has ${activeSubs.count} active subscriber(s).\n\n` +
+          `**Details:**\n` +
+          `• Active Subscribers: ${activeSubs.count}\n` +
+          `• Sequences: ${sequences?.count || 0}\n` +
+          `• Campaigns: ${campaigns?.count || 0}\n\n` +
+          `To delete anyway, use \`force: true\`. This will unsubscribe all subscribers from this list.`;
+      }
+      
+      // Delete sequence enrollments
+      await db.prepare(`
+        DELETE FROM sequence_enrollments 
+        WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
+      `).bind(args.list_id).run();
+      
+      // Delete sequence steps
+      await db.prepare(`
+        DELETE FROM sequence_steps 
+        WHERE sequence_id IN (SELECT id FROM sequences WHERE list_id = ?)
+      `).bind(args.list_id).run();
+      
+      // Delete sequences
+      await db.prepare('DELETE FROM sequences WHERE list_id = ?').bind(args.list_id).run();
+      
+      // Delete subscriptions
+      await db.prepare('DELETE FROM subscriptions WHERE list_id = ?').bind(args.list_id).run();
+      
+      // Unlink campaigns
+      await db.prepare('UPDATE emails SET list_id = NULL WHERE list_id = ?').bind(args.list_id).run();
+      
+      // Unlink templates
+      await db.prepare('UPDATE templates SET list_id = NULL WHERE list_id = ?').bind(args.list_id).run();
+      
+      // Delete list
+      await db.prepare('DELETE FROM lists WHERE id = ?').bind(args.list_id).run();
+      
+      return `✅ List "${l.name}" deleted\n\n` +
+        `**Cleaned up:**\n` +
+        `• ${activeSubs?.count || 0} subscriptions removed\n` +
+        `• ${sequences?.count || 0} sequences deleted\n` +
+        `• ${campaigns?.count || 0} campaigns unlinked`;
+    }
+    
     // ==================== TEMPLATES ====================
     case "courier_list_templates": {
       let query = 'SELECT * FROM templates';
@@ -611,6 +696,9 @@ async function executeTool(name, args, env) {
     
     // ==================== CAMPAIGNS ====================
     case "courier_list_campaigns": {
+      const limit = Math.min(Math.max(1, args.limit || 20), 100);
+      const offset = Math.max(0, args.offset || 0);
+      
       let query = 'SELECT e.*, l.name as list_name FROM emails e LEFT JOIN lists l ON e.list_id = l.id';
       const conditions = [];
       const params = [];
@@ -619,12 +707,26 @@ async function executeTool(name, args, env) {
       if (args.list_id) { conditions.push('e.list_id = ?'); params.push(args.list_id); }
       
       if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
-      query += ' ORDER BY e.created_at DESC LIMIT 50';
+      query += ` ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
       
       const results = await db.prepare(query).bind(...params).all();
+      
+      // Get total count for pagination
+      let countQuery = 'SELECT COUNT(*) as total FROM emails e';
+      if (conditions.length) {
+        countQuery += ' WHERE ' + conditions.join(' AND ').replace(/\?/g, () => {
+          const val = params.shift();
+          params.push(val);
+          return `'${val}'`;
+        });
+      }
+      const total = await db.prepare('SELECT COUNT(*) as total FROM emails').first();
+      
       if (!results.results?.length) return "📭 No campaigns found";
       
-      let out = `📨 **Email Campaigns** (${results.results.length})\n\n`;
+      let out = `📨 **Email Campaigns** (showing ${results.results.length} of ${total?.total || 0})\n\n`;
+      
       for (const e of results.results) {
         const icon = e.status === 'sent' ? '✅' : e.status === 'scheduled' ? '⏰' : '📝';
         out += `${icon} **${e.subject}**\n`;
@@ -633,6 +735,11 @@ async function executeTool(name, args, env) {
         out += `\n   List: ${e.list_name || '(all)'}\n`;
         out += `   ID: ${e.id}\n\n`;
       }
+      
+      if (total?.total > offset + results.results.length) {
+        out += `\n📄 _More campaigns available. Use offset: ${offset + limit} to see next page._`;
+      }
+      
       return out;
     }
     
@@ -687,6 +794,15 @@ async function executeTool(name, args, env) {
       return "✅ Campaign updated";
     }
     
+    case "courier_delete_campaign": {
+      const e = await db.prepare('SELECT status, subject FROM emails WHERE id = ?').bind(args.campaign_id).first();
+      if (!e) return "⛔ Campaign not found";
+      if (e.status === 'sent') return "⛔ Cannot delete a sent campaign";
+      
+      await db.prepare('DELETE FROM emails WHERE id = ?').bind(args.campaign_id).run();
+      return `✅ Campaign "${e.subject}" deleted`;
+    }
+    
     case "courier_preview_campaign": {
       const e = await db.prepare('SELECT e.*, l.name as list_name FROM emails e LEFT JOIN lists l ON e.list_id = l.id WHERE e.id = ?').bind(args.campaign_id).first();
       if (!e) return "⛔ Campaign not found";
@@ -713,20 +829,49 @@ async function executeTool(name, args, env) {
       const e = await db.prepare('SELECT * FROM emails WHERE id = ?').bind(args.campaign_id).first();
       if (!e) return "⛔ Campaign not found";
       
-      const sends = await db.prepare('SELECT COUNT(*) as c FROM email_sends WHERE email_id = ?').bind(args.campaign_id).first();
-      const opens = await db.prepare('SELECT COUNT(DISTINCT send_id) as c FROM email_opens WHERE send_id IN (SELECT id FROM email_sends WHERE email_id = ?)').bind(args.campaign_id).first();
-      const clicks = await db.prepare('SELECT COUNT(*) as c FROM email_clicks WHERE send_id IN (SELECT id FROM email_sends WHERE email_id = ?)').bind(args.campaign_id).first();
+      const stats = await db.prepare(`
+        SELECT 
+          COUNT(*) as sent,
+          SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
+          SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+          SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounced
+        FROM email_sends WHERE email_id = ?
+      `).bind(args.campaign_id).first();
       
-      const sent = sends?.c || 0;
-      const opened = opens?.c || 0;
-      const clicked = clicks?.c || 0;
+      const topLinks = await db.prepare(`
+        SELECT ec.url, COUNT(*) as clicks 
+        FROM email_clicks ec 
+        JOIN email_sends es ON ec.send_id = es.id 
+        WHERE es.email_id = ? 
+        GROUP BY ec.url 
+        ORDER BY clicks DESC 
+        LIMIT 5
+      `).bind(args.campaign_id).all();
+      
+      const sent = stats?.sent || 0;
+      const opened = stats?.opened || 0;
+      const clicked = stats?.clicked || 0;
+      const bounced = stats?.bounced || 0;
       
       let out = `📊 **Campaign Stats: ${e.subject}**\n\n`;
       out += `**Status:** ${e.status}\n`;
       if (e.sent_at) out += `**Sent:** ${e.sent_at}\n`;
-      out += `\n**Sent:** ${sent}\n`;
-      out += `**Opened:** ${opened} (${sent ? Math.round(opened/sent*100) : 0}%)\n`;
-      out += `**Clicked:** ${clicked} (${sent ? Math.round(clicked/sent*100) : 0}%)\n`;
+      out += `\n**Delivery:**\n`;
+      out += `• Sent: ${sent}\n`;
+      out += `• Bounced: ${bounced} (${sent ? Math.round(bounced/sent*100) : 0}%)\n`;
+      out += `\n**Engagement:**\n`;
+      out += `• Opened: ${opened} (${sent ? Math.round(opened/sent*100) : 0}%)\n`;
+      out += `• Clicked: ${clicked} (${sent ? Math.round(clicked/sent*100) : 0}%)\n`;
+      out += `• Click-to-Open: ${opened ? Math.round(clicked/opened*100) : 0}%\n`;
+      
+      if (topLinks.results?.length > 0) {
+        out += `\n**Top Clicked Links:**\n`;
+        for (const link of topLinks.results) {
+          const shortUrl = link.url.length > 50 ? link.url.slice(0, 47) + '...' : link.url;
+          out += `• ${shortUrl} (${link.clicks})\n`;
+        }
+      }
+      
       return out;
     }
     
@@ -795,7 +940,16 @@ async function executeTool(name, args, env) {
         const icon = s.status === 'active' ? '✅' : s.status === 'paused' ? '⏸️' : '📝';
         out += `${icon} **${s.name}**\n`;
         out += `   List: ${s.list_name || '(none)'}\n`;
-        out += `   Trigger: ${s.trigger_type}${s.trigger_value ? ` (${s.trigger_value})` : ''}\n`;
+        
+        // Enhanced trigger display
+        let triggerDisplay = s.trigger_type;
+        if (s.trigger_type === 'tag' && s.trigger_value) {
+          triggerDisplay = `tag: "${s.trigger_value}"`;
+        } else if (s.trigger_value) {
+          triggerDisplay = `${s.trigger_type} (${s.trigger_value})`;
+        }
+        out += `   Trigger: ${triggerDisplay}\n`;
+        
         out += `   Steps: ${s.step_count || 0} | Active: ${s.active_enrollments || 0}\n`;
         out += `   ID: ${s.id}\n\n`;
       }
@@ -822,7 +976,16 @@ async function executeTool(name, args, env) {
       out += `**ID:** ${s.id}\n`;
       out += `**Status:** ${s.status}\n`;
       out += `**List:** ${s.list_name || '(none)'}\n`;
-      out += `**Trigger:** ${s.trigger_type}${s.trigger_value ? ` (${s.trigger_value})` : ''}\n`;
+      
+      // Enhanced trigger display
+      let triggerDisplay = s.trigger_type;
+      if (s.trigger_type === 'tag' && s.trigger_value) {
+        triggerDisplay = `tag: "${s.trigger_value}"`;
+      } else if (s.trigger_value) {
+        triggerDisplay = `${s.trigger_type} (${s.trigger_value})`;
+      }
+      out += `**Trigger:** ${triggerDisplay}\n`;
+      
       if (s.description) out += `**Description:** ${s.description}\n`;
       out += `\n**Enrollments:**\n`;
       out += `• Total: ${stats?.total || 0}\n`;
@@ -855,7 +1018,12 @@ async function executeTool(name, args, env) {
         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)
       `).bind(id, args.name, args.list_id, args.description || null, args.trigger_type || 'subscribe', args.trigger_value || null, now, now).run();
       
-      return `✅ Sequence created: **${args.name}**\nID: ${id}\nStatus: draft\n\nNext: Add steps with courier_add_sequence_step`;
+      let msg = `✅ Sequence created: **${args.name}**\nID: ${id}\nStatus: draft`;
+      if (args.trigger_type === 'tag' && args.trigger_value) {
+        msg += `\nTrigger: tag "${args.trigger_value}"`;
+      }
+      msg += `\n\nNext: Add steps with courier_add_sequence_step`;
+      return msg;
     }
     
     case "courier_update_sequence": {
@@ -1028,16 +1196,91 @@ async function executeTool(name, args, env) {
     
     // ==================== STATS ====================
     case "courier_stats": {
-      const total = await db.prepare('SELECT COUNT(*) as c FROM leads').first();
-      const today = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE date(created_at) = date('now')").first();
-      const week = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-7 days')").first();
-      const month = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-30 days')").first();
+      // Lead counts
+      const totalLeads = await db.prepare('SELECT COUNT(*) as c FROM leads').first();
+      const todayLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE date(created_at) = date('now')").first();
+      const weekLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-7 days')").first();
+      const monthLeads = await db.prepare("SELECT COUNT(*) as c FROM leads WHERE created_at > datetime('now', '-30 days')").first();
       
-      let out = `📊 **Email Platform Stats**\n\n`;
-      out += `Total Leads: ${total?.c || 0}\n`;
-      out += `Today: ${today?.c || 0}\n`;
-      out += `This Week: ${week?.c || 0}\n`;
-      out += `This Month: ${month?.c || 0}\n`;
+      // Subscription stats
+      const activeSubs = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'active'").first();
+      const unsubscribed = await db.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status = 'unsubscribed'").first();
+      
+      // Email performance (last 30 days)
+      const emailStats = await db.prepare(`
+        SELECT 
+          COUNT(*) as total_sends,
+          SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opens,
+          SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicks,
+          SUM(CASE WHEN bounced_at IS NOT NULL THEN 1 ELSE 0 END) as bounces
+        FROM email_sends 
+        WHERE created_at > datetime('now', '-30 days')
+      `).first();
+      
+      // Campaign counts
+      const campaigns = await db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts,
+          SUM(CASE WHEN status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
+          SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent
+        FROM emails
+      `).first();
+      
+      // Sequence stats
+      const sequences = await db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+          SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts
+        FROM sequences
+      `).first();
+      
+      const activeEnrollments = await db.prepare("SELECT COUNT(*) as c FROM sequence_enrollments WHERE status = 'active'").first();
+      
+      // List count
+      const lists = await db.prepare("SELECT COUNT(*) as c FROM lists WHERE status != 'archived'").first();
+      
+      // Calculate rates
+      const sent = emailStats?.total_sends || 0;
+      const opens = emailStats?.opens || 0;
+      const clicks = emailStats?.clicks || 0;
+      const bounces = emailStats?.bounces || 0;
+      
+      let out = `📊 **Courier Platform Stats**\n\n`;
+      
+      out += `**📧 Lists & Subscribers**\n`;
+      out += `• Lists: ${lists?.c || 0}\n`;
+      out += `• Active Subscriptions: ${activeSubs?.c || 0}\n`;
+      out += `• Unsubscribed: ${unsubscribed?.c || 0}\n`;
+      out += `• Total Leads: ${totalLeads?.c || 0}\n`;
+      
+      out += `\n**📈 Lead Growth**\n`;
+      out += `• Today: +${todayLeads?.c || 0}\n`;
+      out += `• This Week: +${weekLeads?.c || 0}\n`;
+      out += `• This Month: +${monthLeads?.c || 0}\n`;
+      
+      out += `\n**📨 Campaigns**\n`;
+      out += `• Total: ${campaigns?.total || 0}\n`;
+      out += `• Drafts: ${campaigns?.drafts || 0}\n`;
+      out += `• Scheduled: ${campaigns?.scheduled || 0}\n`;
+      out += `• Sent: ${campaigns?.sent || 0}\n`;
+      
+      out += `\n**🔄 Sequences**\n`;
+      out += `• Total: ${sequences?.total || 0}\n`;
+      out += `• Active: ${sequences?.active || 0}\n`;
+      out += `• Drafts: ${sequences?.drafts || 0}\n`;
+      out += `• Active Enrollments: ${activeEnrollments?.c || 0}\n`;
+      
+      out += `\n**📬 Email Performance (Last 30 Days)**\n`;
+      out += `• Emails Sent: ${sent}\n`;
+      out += `• Opens: ${opens} (${sent ? Math.round(opens/sent*100) : 0}%)\n`;
+      out += `• Clicks: ${clicks} (${sent ? Math.round(clicks/sent*100) : 0}%)\n`;
+      out += `• Bounces: ${bounces} (${sent ? Math.round(bounces/sent*100) : 0}%)\n`;
+      if (opens > 0) {
+        out += `• Click-to-Open Rate: ${Math.round(clicks/opens*100)}%\n`;
+      }
+      
       return out;
     }
     
