@@ -1343,6 +1343,38 @@ export async function handleMCP(request, env) {
     });
   }
   
+  // Debug endpoint for testing tool execution
+  if (url.searchParams.get('debug') === 'test') {
+    try {
+      const result = await executeTool('courier_stats', {}, env);
+      return new Response(JSON.stringify({
+        success: true,
+        result: result
+      }), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: error.message,
+        stack: error.stack
+      }), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+  }
+  
+  // CORS preflight
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      }
+    });
+  }
+  
   // SSE endpoint - simple version that sends endpoint and closes
   if (request.method === 'GET') {
     const messageEndpoint = `${url.origin}/sse`;
@@ -1352,6 +1384,7 @@ export async function handleMCP(request, env) {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
@@ -1361,9 +1394,12 @@ export async function handleMCP(request, env) {
   
   // POST endpoint for JSON-RPC messages
   if (request.method === 'POST') {
+    let id = null;
+    
     try {
       const message = await request.json();
-      const { id, method, params } = message;
+      id = message.id;
+      const { method, params } = message;
       
       let result;
       
@@ -1383,9 +1419,20 @@ export async function handleMCP(request, env) {
         case 'tools/call':
           const toolName = params.name;
           const toolArgs = params.arguments || {};
-          const toolResult = await executeTool(toolName, toolArgs, env);
-          result = { content: [{ type: 'text', text: toolResult }] };
+          try {
+            const toolResult = await executeTool(toolName, toolArgs, env);
+            result = { content: [{ type: 'text', text: toolResult }] };
+          } catch (toolError) {
+            // Return error as tool result, not as JSON-RPC error
+            result = { content: [{ type: 'text', text: `⛔ Error: ${toolError.message}` }], isError: true };
+          }
           break;
+          
+        case 'notifications/initialized':
+          // Client notification, no response needed
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: {} }), {
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
           
         default:
           return new Response(JSON.stringify({
@@ -1402,9 +1449,11 @@ export async function handleMCP(request, env) {
       });
       
     } catch (error) {
+      console.error('MCP Error:', error);
       return new Response(JSON.stringify({
         jsonrpc: '2.0',
-        error: { code: -32603, message: error.message }
+        id: id,
+        error: { code: -32603, message: error.message || 'Internal error' }
       }), {
         status: 500,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
