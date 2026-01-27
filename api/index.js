@@ -10,7 +10,7 @@ import { handleTrackOpen, handleTrackClick, handlePublicUnsubscribe } from './ha
 import { handleGetLists, handleCreateList, handleGetList, handleUpdateList, handleArchiveList, handleDeleteList, handleListStats } from './handlers-lists.js';
 import { handleGetListSubscribers, handleAddSubscriber, handleRemoveSubscriber, handleDeleteSubscribers, handleExportListSubscribers, handleImportSubscribers, handleGetSubscribers, handleGetSubscriber, handleUnsubscribeLead } from './handlers-subscribers.js';
 import { handleGetSequences, handleCreateSequence, handleGetSequence, handleUpdateSequence, handleDeleteSequence, handleGetSequenceSteps, handleAddSequenceStep, handleUpdateSequenceStep, handleDeleteSequenceStep, handleReorderSequenceSteps, handleEnrollInSequence, handleGetSequenceEnrollments } from './handlers-sequences.js';
-import { handleGetEmails, handleCreateEmail, handleGetEmail, handleUpdateEmail, handleDeleteEmail, handleDuplicateEmail, handlePreviewEmail, handleScheduleEmail, handleCancelSchedule, handleSendTestEmail, handleSendEmail, handleEmailStats } from './handlers-emails.js';
+import { handleGetEmails, handleCreateEmail, handleGetEmail, handleUpdateEmail, handleDeleteEmail, handleDuplicateEmail, handlePreviewEmail, handleScheduleEmail, handleCancelSchedule, handleSendTestEmail, handleSendEmail, handleEmailStats, handleCreateAndSendCampaign } from './handlers-emails.js';
 import { handleGetTemplates, handleCreateTemplate, handleGetTemplate, handleUpdateTemplate, handleDeleteTemplate, handleDuplicateTemplate } from './handlers-templates.js';
 import { handleSubscribe, handleLeadCapture, handleGetLeads, handleExportLeads, handleStats } from './handlers-legacy.js';
 import { processSequenceEmails, processScheduledCampaigns, handleProcessSequences } from './cron.js';
@@ -214,6 +214,11 @@ export default {
     // === MANUAL CRON TRIGGERS ===
     if (url.pathname === '/api/process-sequences' && request.method === 'POST') {
       return handleProcessSequences(request, env);
+    }
+    
+    // === CAMPAIGNS (create + send in one call) ===
+    if (url.pathname === '/api/campaigns' && request.method === 'POST') {
+      return handleCreateAndSendCampaign(request, env);
     }
     
     // === LISTS ===
