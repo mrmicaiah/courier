@@ -409,3 +409,165 @@ export async function handleEmailStats(id, env) {
     top_links: clicks.results
   });
 }
+
+/**
+ * Create and optionally send a campaign in one call
+ * POST /api/campaigns
+ * 
+ * Request body:
+ * {
+ *   "list_id": "list-slug-or-uuid",  // Required - list slug or ID
+ *   "subject": "Email subject",       // Required
+ *   "body_html": "<html>...</html>",  // Required
+ *   "body_text": "Plain text",        // Optional
+ *   "send_now": true                  // Optional - if true, sends immediately
+ * }
+ */
+export async function handleCreateAndSendCampaign(request, env) {
+  try {
+    const data = await request.json();
+    
+    // Validate required fields
+    if (!data.list_id) {
+      return jsonResponse({ error: 'list_id required' }, 400);
+    }
+    if (!data.subject) {
+      return jsonResponse({ error: 'subject required' }, 400);
+    }
+    if (!data.body_html) {
+      return jsonResponse({ error: 'body_html required' }, 400);
+    }
+
+    // Look up list by ID or slug
+    let list = await env.DB.prepare('SELECT * FROM lists WHERE id = ? OR slug = ?')
+      .bind(data.list_id, data.list_id)
+      .first();
+
+    if (!list) {
+      return jsonResponse({ error: 'List not found' }, 404);
+    }
+
+    // Create the email record
+    const emailId = generateId();
+    const now = new Date().toISOString();
+
+    await env.DB.prepare(`
+      INSERT INTO emails (id, list_id, title, subject, preview_text, body_html, body_text, segment, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'all', 'draft', ?, ?)
+    `).bind(
+      emailId,
+      list.id,
+      data.subject,
+      data.subject,
+      null,
+      data.body_html,
+      data.body_text || null,
+      now,
+      now
+    ).run();
+
+    // If send_now is not true, just return the created email
+    if (!data.send_now) {
+      return jsonResponse({ 
+        success: true, 
+        email_id: emailId, 
+        message: 'Campaign created as draft',
+        sent_count: 0,
+        failed_count: 0
+      }, 201);
+    }
+
+    // Get the list's campaign template if it exists
+    let template = null;
+    if (list.campaign_template_id) {
+      template = await env.DB.prepare('SELECT * FROM templates WHERE id = ?')
+        .bind(list.campaign_template_id)
+        .first();
+    }
+
+    // Get active subscribers for this list
+    const subscribers = await env.DB.prepare(`
+      SELECT l.id, l.email, l.name, s.id as subscription_id
+      FROM subscriptions s
+      JOIN leads l ON s.lead_id = l.id
+      WHERE s.list_id = ? AND s.status = 'active'
+    `).bind(list.id).all();
+
+    if (!subscribers.results || subscribers.results.length === 0) {
+      // Update email to sent with 0 count
+      await env.DB.prepare(`
+        UPDATE emails SET status = 'sent', sent_at = ?, sent_count = 0, updated_at = ? WHERE id = ?
+      `).bind(now, now, emailId).run();
+
+      return jsonResponse({ 
+        success: true, 
+        email_id: emailId, 
+        sent_count: 0,
+        failed_count: 0,
+        message: 'No active subscribers found'
+      });
+    }
+
+    // Build email object for rendering
+    const emailForRender = {
+      id: emailId,
+      subject: data.subject,
+      body_html: data.body_html,
+      body_text: data.body_text || null,
+      from_name: list.from_name,
+      from_email: list.from_email
+    };
+
+    const baseUrl = 'https://email-bot-server.micaiah-tasks.workers.dev';
+    let sent = 0;
+    let failed = 0;
+    const errors = [];
+
+    // Send to each subscriber
+    for (const subscriber of subscribers.results) {
+      try {
+        const sendId = generateId();
+        const renderedHtml = renderEmail(emailForRender, subscriber, sendId, baseUrl, list, template);
+        
+        const messageId = await sendEmailViaSES(
+          env, 
+          subscriber.email, 
+          data.subject, 
+          renderedHtml, 
+          data.body_text,
+          list.from_name,
+          list.from_email
+        );
+        
+        await env.DB.prepare(`
+          INSERT INTO email_sends (id, email_id, lead_id, subscription_id, ses_message_id, status, created_at)
+          VALUES (?, ?, ?, ?, ?, 'sent', ?)
+        `).bind(sendId, emailId, subscriber.id, subscriber.subscription_id, messageId, new Date().toISOString()).run();
+        
+        sent++;
+      } catch (e) {
+        failed++;
+        errors.push({ email: subscriber.email, error: e.message });
+        console.error('Failed to send to ' + subscriber.email + ':', e);
+      }
+    }
+
+    // Update email status
+    await env.DB.prepare(`
+      UPDATE emails SET status = 'sent', sent_at = ?, sent_count = ?, updated_at = ? WHERE id = ?
+    `).bind(new Date().toISOString(), sent, new Date().toISOString(), emailId).run();
+
+    return jsonResponse({ 
+      success: true, 
+      email_id: emailId,
+      sent_count: sent,
+      failed_count: failed,
+      message: 'Campaign sent',
+      errors: errors.length > 0 ? errors.slice(0, 10) : undefined
+    });
+
+  } catch (error) {
+    console.error('Create and send campaign error:', error);
+    return jsonResponse({ error: 'Failed to create/send campaign: ' + error.message }, 500);
+  }
+}
