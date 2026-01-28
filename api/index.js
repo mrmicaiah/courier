@@ -31,6 +31,18 @@ export default {
 
     const url = new URL(request.url);
     
+    // === DEBUG: Test route to verify routing works ===
+    if (url.pathname === '/test-route') {
+      return new Response(JSON.stringify({ 
+        ok: true, 
+        pathname: url.pathname,
+        mcpImported: typeof handleMCP === 'function',
+        timestamp: new Date().toISOString()
+      }), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+    
     // === MCP SERVER ENDPOINT ===
     if (url.pathname === '/sse' || url.pathname === '/mcp') {
       return handleMCP(request, env);
