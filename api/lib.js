@@ -1,5 +1,6 @@
 /**
  * Shared utilities for Email Platform
+ * Last updated: 2026-01-27
  */
 
 // ==================== CONSTANTS ====================
