@@ -453,7 +453,7 @@ export async function handleCreateAndSendCampaign(request, env) {
 
     await env.DB.prepare(`
       INSERT INTO emails (id, list_id, title, subject, preview_text, body_html, body_text, segment, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'all', 'draft', ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
     `).bind(
       emailId,
       list.id,
@@ -462,6 +462,7 @@ export async function handleCreateAndSendCampaign(request, env) {
       null,
       data.body_html,
       data.body_text || null,
+      'all',
       now,
       now
     ).run();
