@@ -1,6 +1,6 @@
 /**
  * Shared utilities for Email Platform
- * Last updated: 2026-01-27
+ * Last updated: 2026-01-29
  */
 
 // ==================== CONSTANTS ====================
@@ -20,6 +20,7 @@ export const ALLOWED_ORIGINS = [
   'https://builtbydenny.com',
   'https://www.builtbydenny.com',
   'https://mrmicaiah.github.io',
+  'https://up-command.pages.dev',
   'http://localhost:3000',
   'http://127.0.0.1:5500',
 ];
