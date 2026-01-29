@@ -62,7 +62,7 @@ export default {
       });
     }
     
-    // === PUBLIC ENDPOINTS ===
+    // === PUBLIC ENDPOINTS (no auth required) ===
     if (url.pathname === '/health') {
       return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
     }
@@ -85,7 +85,7 @@ export default {
       return handlePublicUnsubscribe(request, env);
     }
 
-    // === DASHBOARD LOGIN ===
+    // === DASHBOARD LOGIN (no auth required - this IS the auth endpoint) ===
     if (url.pathname === '/api/dashboard/login' && request.method === 'POST') {
       try {
         const data = await request.json();
@@ -103,7 +103,7 @@ export default {
       }
     }
 
-    // === MEET THE CONTRACTORS DASHBOARD ===
+    // === MEET THE CONTRACTORS DASHBOARD (custom auth) ===
     if (url.pathname === '/api/mtc/verify' && request.method === 'POST') {
       try {
         const data = await request.json();
@@ -215,11 +215,15 @@ export default {
       }
     }
 
-    // === PROTECTED ENDPOINTS ===
-    if (url.pathname.startsWith('/api/')) {
+    // === PROTECTED ENDPOINTS (require Bearer token) ===
+    // Skip auth check for public endpoints that start with /api/ but were already handled above
+    if (url.pathname.startsWith('/api/') && 
+        !url.pathname.startsWith('/api/mtc/') &&
+        url.pathname !== '/api/lead' && 
+        url.pathname !== '/api/subscribe') {
       const authResult = checkAuth(request, env);
       if (!authResult.ok) {
-        return jsonResponse({ error: 'Unauthorized' }, 401);
+        return jsonResponse({ error: 'Unauthorized' }, 401, request);
       }
     }
     
