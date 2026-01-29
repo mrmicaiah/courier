@@ -1375,12 +1375,39 @@ export async function handleMCP(request, env) {
     });
   }
   
-  // SSE endpoint - simple version that sends endpoint and closes
+  // SSE endpoint using ReadableStream for proper streaming
   if (request.method === 'GET') {
     const messageEndpoint = `${url.origin}/sse`;
-    const sseMessage = `data: ${JSON.stringify({ jsonrpc: '2.0', method: 'endpoint', params: { url: messageEndpoint } })}\n\n`;
     
-    return new Response(sseMessage, {
+    // Create a proper streaming response
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+    
+    // Send the endpoint message and keep connection alive briefly
+    (async () => {
+      try {
+        // Send endpoint message
+        const endpointMsg = `event: endpoint\ndata: ${JSON.stringify({ url: messageEndpoint })}\n\n`;
+        await writer.write(encoder.encode(endpointMsg));
+        
+        // Send a few keepalive pings over 30 seconds to keep connection stable
+        for (let i = 0; i < 6; i++) {
+          await new Promise(r => setTimeout(r, 5000));
+          await writer.write(encoder.encode(': keepalive\n\n'));
+        }
+      } catch (e) {
+        // Connection closed by client, that's fine
+      } finally {
+        try {
+          await writer.close();
+        } catch (e) {
+          // Already closed
+        }
+      }
+    })();
+    
+    return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
