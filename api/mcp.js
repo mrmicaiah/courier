@@ -1171,14 +1171,29 @@ async function executeTool(name, args, env) {
       const ids = args.subscription_ids || (args.subscription_id ? [args.subscription_id] : []);
       if (!ids.length) return "⛔ Provide subscription_id or subscription_ids";
       
-      if (args.permanent) {
-        for (const id of ids) {
+      const now = new Date().toISOString();
+      
+      for (const id of ids) {
+        // Always delete sequence enrollments first (FK constraint)
+        await db.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?').bind(id).run();
+        
+        if (args.permanent) {
+          // Get lead_id before deleting subscription
+          const sub = await db.prepare('SELECT lead_id FROM subscriptions WHERE id = ?').bind(id).first();
           await db.prepare('DELETE FROM subscriptions WHERE id = ?').bind(id).run();
-        }
-      } else {
-        for (const id of ids) {
+          
+          // If permanent and this was the only subscription for this lead, delete the lead too
+          if (sub?.lead_id) {
+            const otherSubs = await db.prepare('SELECT COUNT(*) as c FROM subscriptions WHERE lead_id = ?').bind(sub.lead_id).first();
+            if (!otherSubs?.c || otherSubs.c === 0) {
+              await db.prepare('DELETE FROM email_sends WHERE lead_id = ?').bind(sub.lead_id).run();
+              await db.prepare('DELETE FROM touches WHERE lead_id = ?').bind(sub.lead_id).run();
+              await db.prepare('DELETE FROM leads WHERE id = ?').bind(sub.lead_id).run();
+            }
+          }
+        } else {
           await db.prepare("UPDATE subscriptions SET status = 'unsubscribed', unsubscribed_at = ? WHERE id = ?")
-            .bind(new Date().toISOString(), id).run();
+            .bind(now, id).run();
         }
       }
       
