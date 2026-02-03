@@ -33,6 +33,42 @@ function mergeTags(existingTags, newTags) {
 }
 
 /**
+ * Cancel active enrollments in sequences triggered by old segment tags
+ * This prevents users from receiving emails from multiple segment sequences
+ * when they retake a quiz and get a different result
+ */
+async function cancelOldSegmentEnrollments(env, subscriptionId, listId, oldSegmentTag, newSegmentTag) {
+  if (!oldSegmentTag || oldSegmentTag === newSegmentTag) return;
+  
+  try {
+    // Find all sequences on this list that are triggered by the OLD segment tag
+    const oldSequences = await env.DB.prepare(`
+      SELECT id FROM sequences 
+      WHERE list_id = ? AND trigger_type = 'tag' AND trigger_value = ?
+    `).bind(listId, oldSegmentTag).all();
+    
+    if (!oldSequences.results || oldSequences.results.length === 0) return;
+    
+    const now = new Date().toISOString();
+    
+    // Cancel active enrollments in those sequences
+    for (const sequence of oldSequences.results) {
+      const result = await env.DB.prepare(`
+        UPDATE sequence_enrollments 
+        SET status = 'cancelled', cancelled_at = ?
+        WHERE subscription_id = ? AND sequence_id = ? AND status = 'active'
+      `).bind(now, subscriptionId, sequence.id).run();
+      
+      if (result.meta.changes > 0) {
+        console.log(`Cancelled enrollment in sequence ${sequence.id} (old tag: ${oldSegmentTag}, new tag: ${newSegmentTag})`);
+      }
+    }
+  } catch (error) {
+    console.error('cancelOldSegmentEnrollments error:', error);
+  }
+}
+
+/**
  * Enroll a subscription in sequences that match any of the provided tags
  * Finds sequences where trigger_type='tag' and trigger_value matches a tag
  */
@@ -190,6 +226,10 @@ export async function handleSubscribe(request, env) {
     // Track which tags are NEW (for sequence enrollment)
     let newTagsForEnrollment = [];
     
+    // Track segment tag changes for cancelling old enrollments
+    let existingSegmentTag = null;
+    let newSegmentTag = tagsArray.find(t => SEGMENT_TAGS.includes(t)) || null;
+    
     if (!lead) {
       isNewLead = true;
       newTagsForEnrollment = tagsArray; // All tags are new for a new lead
@@ -222,8 +262,8 @@ export async function handleSubscribe(request, env) {
       
       // Figure out which tags are actually NEW (for sequence enrollment)
       // A segment tag is "new" if it wasn't there before OR if it's replacing a different segment
-      const existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t));
-      const newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t));
+      existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t)) || null;
+      newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t)) || null;
       
       if (newSegmentTag && newSegmentTag !== existingSegmentTag) {
         // New segment tag (or changed segment) - enroll in that sequence
@@ -273,6 +313,12 @@ export async function handleSubscribe(request, env) {
         isNew = true;
       }
       subscription = existingSub;
+      
+      // IMPORTANT: Cancel old segment enrollments BEFORE enrolling in new ones
+      // This prevents users from receiving emails from multiple segment sequences
+      if (existingSegmentTag && newSegmentTag && existingSegmentTag !== newSegmentTag) {
+        await cancelOldSegmentEnrollments(env, subscriptionId, list.id, existingSegmentTag, newSegmentTag);
+      }
       
       // For existing subscribers with new tags, enroll in tag-triggered sequences
       // But ONLY for tags they didn't already have
@@ -381,6 +427,10 @@ export async function handleLeadCapture(request, env) {
     let leadId;
     let isNew = false;
     let newTagsForEnrollment = tagsArray;
+    
+    // Track segment tag changes
+    let existingSegmentTag = null;
+    let newSegmentTag = tagsArray.find(t => SEGMENT_TAGS.includes(t)) || null;
 
     if (existing) {
       leadId = existing.id;
@@ -392,8 +442,8 @@ export async function handleLeadCapture(request, env) {
       const mergedTags = mergeTags(existingTags, newTags);
       
       // Figure out which tags are actually NEW
-      const existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t));
-      const newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t));
+      existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t)) || null;
+      newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t)) || null;
       
       if (newSegmentTag && newSegmentTag !== existingSegmentTag) {
         newTagsForEnrollment = newTags.filter(t => !existingTags.includes(t) || t === newSegmentTag);
@@ -419,6 +469,21 @@ export async function handleLeadCapture(request, env) {
       ).run();
 
       await logTouch(env, existing.id, lead.source, lead.funnel);
+      
+      // Cancel old segment enrollments if segment changed
+      if (existingSegmentTag && newSegmentTag && existingSegmentTag !== newSegmentTag) {
+        // Find the subscription for this lead on the default list
+        const defaultList = await env.DB.prepare('SELECT * FROM lists WHERE slug = ?').bind('untitled-publishers').first();
+        if (defaultList) {
+          const sub = await env.DB.prepare(
+            'SELECT id FROM subscriptions WHERE lead_id = ? AND list_id = ?'
+          ).bind(leadId, defaultList.id).first();
+          
+          if (sub) {
+            await cancelOldSegmentEnrollments(env, sub.id, defaultList.id, existingSegmentTag, newSegmentTag);
+          }
+        }
+      }
 
     } else {
       isNew = true;
