@@ -1,6 +1,7 @@
 /**
  * Courier MCP Server
  * Exposes email marketing tools directly to Claude via MCP protocol
+ * Updated: 2026-02-03 - Added send_at_time to sequence step updates
  */
 
 import { generateId } from './lib.js';
@@ -350,7 +351,8 @@ const TOOLS = [
         subject: { type: "string" },
         body_html: { type: "string" },
         delay_minutes: { type: "number", default: 0, description: "0=immediate, 1440=1 day, 10080=1 week" },
-        preview_text: { type: "string" }
+        preview_text: { type: "string" },
+        send_at_time: { type: "string", description: "Specific time to send (HH:MM in 24h format, e.g. '09:00'). Set to null for immediate delivery based on delay_minutes." }
       },
       required: ["sequence_id", "subject", "body_html"]
     }
@@ -367,7 +369,8 @@ const TOOLS = [
         body_html: { type: "string" },
         delay_minutes: { type: "number" },
         preview_text: { type: "string" },
-        status: { type: "string", enum: ["active", "paused"] }
+        status: { type: "string", enum: ["active", "paused"] },
+        send_at_time: { type: "string", description: "Specific time to send (HH:MM in 24h format, e.g. '09:00'). Use 'null' or empty string to clear and enable immediate delivery." }
       },
       required: ["sequence_id", "step_id"]
     }
@@ -983,7 +986,8 @@ async function executeTool(name, args, env) {
             step.delay_minutes < 60 ? `${step.delay_minutes}m` :
             step.delay_minutes < 1440 ? `${Math.round(step.delay_minutes / 60)}h` :
             `${Math.round(step.delay_minutes / 1440)}d`;
-          out += `${step.position}. [${delay}] ${step.subject}${step.status !== 'active' ? ` (${step.status})` : ''}\n`;
+          const sendTime = step.send_at_time ? ` @ ${step.send_at_time}` : '';
+          out += `${step.position}. [${delay}${sendTime}] ${step.subject}${step.status !== 'active' ? ` (${step.status})` : ''}\n`;
           out += `   ID: ${step.id}\n`;
         }
       } else {
@@ -1045,17 +1049,23 @@ async function executeTool(name, args, env) {
       const last = await db.prepare('SELECT MAX(position) as pos FROM sequence_steps WHERE sequence_id = ?').bind(args.sequence_id).first();
       const position = (last?.pos || 0) + 1;
       
+      // Handle send_at_time - can be a time string or null
+      const sendAtTime = args.send_at_time || null;
+      
       await db.prepare(`
-        INSERT INTO sequence_steps (id, sequence_id, position, subject, body_html, delay_minutes, preview_text, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-      `).bind(id, args.sequence_id, position, args.subject, args.body_html, args.delay_minutes || 0, args.preview_text || null, now, now).run();
+        INSERT INTO sequence_steps (id, sequence_id, position, subject, body_html, delay_minutes, preview_text, send_at_time, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      `).bind(id, args.sequence_id, position, args.subject, args.body_html, args.delay_minutes || 0, args.preview_text || null, sendAtTime, now, now).run();
       
       const delay = (args.delay_minutes || 0) === 0 ? 'immediately' :
         args.delay_minutes < 60 ? `after ${args.delay_minutes} minutes` :
         args.delay_minutes < 1440 ? `after ${Math.round(args.delay_minutes / 60)} hours` :
         `after ${Math.round(args.delay_minutes / 1440)} days`;
       
-      return `✅ Step ${position} added: **${args.subject}**\nSends: ${delay}\nID: ${id}`;
+      let msg = `✅ Step ${position} added: **${args.subject}**\nSends: ${delay}`;
+      if (sendAtTime) msg += ` at ${sendAtTime}`;
+      msg += `\nID: ${id}`;
+      return msg;
     }
     
     case "courier_update_sequence_step": {
@@ -1068,6 +1078,17 @@ async function executeTool(name, args, env) {
       if (args.preview_text !== undefined) { updates.push('preview_text = ?'); values.push(args.preview_text); }
       if (args.status !== undefined) { updates.push('status = ?'); values.push(args.status); }
       
+      // Handle send_at_time - accepts time string, 'null', '', or undefined
+      // 'null' or '' clears the value (sets to NULL for immediate delivery)
+      if (args.send_at_time !== undefined) {
+        updates.push('send_at_time = ?');
+        if (args.send_at_time === 'null' || args.send_at_time === '' || args.send_at_time === null) {
+          values.push(null);
+        } else {
+          values.push(args.send_at_time);
+        }
+      }
+      
       if (updates.length === 0) return "⛔ No updates provided";
       
       updates.push('updated_at = ?');
@@ -1075,7 +1096,14 @@ async function executeTool(name, args, env) {
       values.push(args.step_id);
       
       await db.prepare(`UPDATE sequence_steps SET ${updates.join(', ')} WHERE id = ?`).bind(...values).run();
-      return "✅ Step updated";
+      
+      let msg = "✅ Step updated";
+      if (args.send_at_time === 'null' || args.send_at_time === '' || args.send_at_time === null) {
+        msg += "\n⏰ Send time cleared - will now send based on delay only";
+      } else if (args.send_at_time) {
+        msg += `\n⏰ Send time set to ${args.send_at_time}`;
+      }
+      return msg;
     }
     
     case "courier_delete_sequence_step": {
