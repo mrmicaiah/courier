@@ -5,6 +5,33 @@
 import { generateId, generateSlug, jsonResponse, isValidEmail, isDisposableEmail, sanitizeString, sendEmailViaSES } from './lib.js';
 import { enrollInSequence } from './handlers-sequences.js';
 
+// Segment tags are mutually exclusive - a lead can only have ONE of these
+// When a new segment tag comes in, it REPLACES any existing segment tag
+const SEGMENT_TAGS = ['leader', 'servant', 'father', 'mother', 'husband', 'wife', 'son', 'daughter'];
+
+/**
+ * Merge tags intelligently:
+ * - Segment tags (leader, father, etc.) REPLACE each other (mutually exclusive)
+ * - Other tags accumulate normally
+ */
+function mergeTags(existingTags, newTags) {
+  const existing = Array.isArray(existingTags) ? existingTags : [];
+  const incoming = Array.isArray(newTags) ? newTags : [];
+  
+  // Check if incoming tags contain a segment tag
+  const incomingSegmentTag = incoming.find(t => SEGMENT_TAGS.includes(t));
+  
+  if (incomingSegmentTag) {
+    // Remove ALL existing segment tags, keep non-segment tags
+    const nonSegmentExisting = existing.filter(t => !SEGMENT_TAGS.includes(t));
+    // Merge: existing non-segment + all incoming (which includes the new segment)
+    return [...new Set([...nonSegmentExisting, ...incoming])].slice(0, 50);
+  } else {
+    // No segment tag in incoming - just merge normally
+    return [...new Set([...existing, ...incoming])].slice(0, 50);
+  }
+}
+
 /**
  * Enroll a subscription in sequences that match any of the provided tags
  * Finds sequences where trigger_type='tag' and trigger_value matches a tag
@@ -160,8 +187,13 @@ export async function handleSubscribe(request, env) {
     // Parse tags for use later
     const tagsArray = Array.isArray(data.tags) ? data.tags.slice(0, 20).map(t => sanitizeString(t, 30)) : [];
     
+    // Track which tags are NEW (for sequence enrollment)
+    let newTagsForEnrollment = [];
+    
     if (!lead) {
       isNewLead = true;
+      newTagsForEnrollment = tagsArray; // All tags are new for a new lead
+      
       const result = await env.DB.prepare(`
         INSERT INTO leads (email, name, source, funnel, segment, tags, metadata, ip_country, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -184,7 +216,22 @@ export async function handleSubscribe(request, env) {
       leadId = lead.id;
       const existingTags = lead.tags ? JSON.parse(lead.tags) : [];
       const newTags = data.tags || [];
-      const mergedTags = [...new Set([...existingTags, ...newTags])].slice(0, 50);
+      
+      // Use smart merge that replaces segment tags
+      const mergedTags = mergeTags(existingTags, newTags);
+      
+      // Figure out which tags are actually NEW (for sequence enrollment)
+      // A segment tag is "new" if it wasn't there before OR if it's replacing a different segment
+      const existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t));
+      const newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t));
+      
+      if (newSegmentTag && newSegmentTag !== existingSegmentTag) {
+        // New segment tag (or changed segment) - enroll in that sequence
+        newTagsForEnrollment = newTags.filter(t => !existingTags.includes(t) || t === newSegmentTag);
+      } else {
+        // No segment change - just enroll in actually new tags
+        newTagsForEnrollment = newTags.filter(t => !existingTags.includes(t));
+      }
       
       const existingMetadata = lead.metadata ? JSON.parse(lead.metadata) : {};
       const mergedMetadata = { ...existingMetadata, ...metadataObj };
@@ -226,6 +273,12 @@ export async function handleSubscribe(request, env) {
         isNew = true;
       }
       subscription = existingSub;
+      
+      // For existing subscribers with new tags, enroll in tag-triggered sequences
+      // But ONLY for tags they didn't already have
+      if (newTagsForEnrollment.length > 0) {
+        await enrollByTags(env, subscriptionId, list.id, newTagsForEnrollment);
+      }
     } else {
       isNew = true;
       subscriptionId = generateId();
@@ -253,10 +306,9 @@ export async function handleSubscribe(request, env) {
         await enrollInSequence(env, subscriptionId, list.welcome_sequence_id);
       }
       
-      // Tag-based sequence enrollment
-      const leadTags = lead.tags ? JSON.parse(lead.tags) : [];
-      if (leadTags.length > 0) {
-        await enrollByTags(env, subscriptionId, list.id, leadTags);
+      // Tag-based sequence enrollment - use the new tags only
+      if (newTagsForEnrollment.length > 0) {
+        await enrollByTags(env, subscriptionId, list.id, newTagsForEnrollment);
       }
       
       if (list.notify_email) {
@@ -328,14 +380,26 @@ export async function handleLeadCapture(request, env) {
 
     let leadId;
     let isNew = false;
-    let mergedTags = tagsArray;
+    let newTagsForEnrollment = tagsArray;
 
     if (existing) {
       leadId = existing.id;
       
       const existingTags = existing.tags ? JSON.parse(existing.tags) : [];
       const newTags = data.tags || [];
-      mergedTags = [...new Set([...existingTags, ...newTags])].slice(0, 50);
+      
+      // Use smart merge that replaces segment tags
+      const mergedTags = mergeTags(existingTags, newTags);
+      
+      // Figure out which tags are actually NEW
+      const existingSegmentTag = existingTags.find(t => SEGMENT_TAGS.includes(t));
+      const newSegmentTag = newTags.find(t => SEGMENT_TAGS.includes(t));
+      
+      if (newSegmentTag && newSegmentTag !== existingSegmentTag) {
+        newTagsForEnrollment = newTags.filter(t => !existingTags.includes(t) || t === newSegmentTag);
+      } else {
+        newTagsForEnrollment = newTags.filter(t => !existingTags.includes(t));
+      }
       
       await env.DB.prepare(`
         UPDATE leads 
@@ -387,9 +451,9 @@ export async function handleLeadCapture(request, env) {
           VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
         `).bind(subId, leadId, defaultList.id, lead.source, lead.funnel, lead.created_at, lead.created_at).run();
         
-        // Tag-based sequence enrollment for lead capture
-        if (tagsArray.length > 0) {
-          await enrollByTags(env, subId, defaultList.id, tagsArray);
+        // Tag-based sequence enrollment for lead capture - only new tags
+        if (newTagsForEnrollment.length > 0) {
+          await enrollByTags(env, subId, defaultList.id, newTagsForEnrollment);
         }
         
         if (defaultList.notify_email) {
