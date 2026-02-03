@@ -1,7 +1,7 @@
 /**
  * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + AWS SES
- * Deployed: 2026-01-30
+ * Deployed: 2026-02-03
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
