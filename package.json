@@ -1,0 +1,11 @@
+{
+  "name": "courier",
+  "version": "1.0.0",
+  "description": "Courier - Email marketing platform",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
