@@ -2,7 +2,7 @@
  * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + Resend
  * Deployed via Cloudflare Git Integration
- * Build fix: 2026-02-04 - Added MTC delete endpoint
+ * Build fix: 2026-02-04 - MTC delete with detailed errors
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
@@ -220,7 +220,12 @@ export default {
     if (url.pathname === '/api/mtc/delete' && request.method === 'POST') {
       try {
         const password = request.headers.get('X-MTC-Password');
-        const customPassword = await env.KV?.get('mtc_password');
+        let customPassword = null;
+        try {
+          customPassword = env.KV ? await env.KV.get('mtc_password') : null;
+        } catch (e) {
+          // KV not available, use default
+        }
         const validPassword = customPassword || MTC_PASSWORD;
         
         if (password !== validPassword) {
@@ -231,30 +236,36 @@ export default {
         const { email, list } = data;
         
         if (!email || !list || !MTC_ALLOWED_LISTS.includes(list)) {
-          return jsonResponse({ error: 'Invalid request' }, 400, request);
+          return jsonResponse({ error: 'Invalid request - missing email or list' }, 400, request);
         }
         
         // Get the list
         const listRecord = await env.DB.prepare('SELECT * FROM lists WHERE slug = ?').bind(list).first();
         if (!listRecord) {
-          return jsonResponse({ error: 'List not found' }, 404, request);
+          return jsonResponse({ error: 'List not found: ' + list }, 404, request);
         }
         
-        // Get the lead
-        const lead = await env.DB.prepare('SELECT * FROM leads WHERE email = ?').bind(email).first();
+        // Get the lead - use case insensitive search
+        const lead = await env.DB.prepare('SELECT * FROM leads WHERE LOWER(email) = LOWER(?)').bind(email).first();
         if (!lead) {
-          return jsonResponse({ error: 'Lead not found' }, 404, request);
+          return jsonResponse({ error: 'Lead not found: ' + email }, 404, request);
         }
         
         // Delete the subscription (not the lead, in case they're on other lists)
-        await env.DB.prepare('DELETE FROM subscriptions WHERE lead_id = ? AND list_id = ?')
+        const deleteResult = await env.DB.prepare('DELETE FROM subscriptions WHERE lead_id = ? AND list_id = ?')
           .bind(lead.id, listRecord.id)
           .run();
         
-        return jsonResponse({ success: true, deleted: email }, 200, request);
+        return jsonResponse({ 
+          success: true, 
+          deleted: email,
+          leadId: lead.id,
+          listId: listRecord.id,
+          changes: deleteResult.meta?.changes || 0
+        }, 200, request);
       } catch (error) {
         console.error('Delete error:', error);
-        return jsonResponse({ error: 'Failed to delete entry' }, 500, request);
+        return jsonResponse({ error: 'Delete failed: ' + (error.message || 'Unknown error') }, 500, request);
       }
     }
 
