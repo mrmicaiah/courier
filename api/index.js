@@ -2,7 +2,7 @@
  * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + Resend
  * Deployed via Cloudflare Git Integration
- * Build fix: 2026-02-04 - MTC delete with detailed errors
+ * Build fix: 2026-02-04 - MTC delete: handle FK constraints
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
@@ -251,9 +251,29 @@ export default {
           return jsonResponse({ error: 'Lead not found: ' + email }, 404, request);
         }
         
-        // Delete the subscription (not the lead, in case they're on other lists)
-        const deleteResult = await env.DB.prepare('DELETE FROM subscriptions WHERE lead_id = ? AND list_id = ?')
+        // Get the subscription
+        const subscription = await env.DB.prepare('SELECT * FROM subscriptions WHERE lead_id = ? AND list_id = ?')
           .bind(lead.id, listRecord.id)
+          .first();
+        
+        if (!subscription) {
+          return jsonResponse({ error: 'Subscription not found' }, 404, request);
+        }
+        
+        // Delete related records first (FK constraints)
+        // 1. Delete sequence enrollments for this subscription
+        await env.DB.prepare('DELETE FROM sequence_enrollments WHERE subscription_id = ?')
+          .bind(subscription.id)
+          .run();
+        
+        // 2. Delete email sends for this subscription (set to NULL or delete)
+        await env.DB.prepare('UPDATE email_sends SET subscription_id = NULL WHERE subscription_id = ?')
+          .bind(subscription.id)
+          .run();
+        
+        // 3. Now delete the subscription
+        const deleteResult = await env.DB.prepare('DELETE FROM subscriptions WHERE id = ?')
+          .bind(subscription.id)
           .run();
         
         return jsonResponse({ 
@@ -261,6 +281,7 @@ export default {
           deleted: email,
           leadId: lead.id,
           listId: listRecord.id,
+          subscriptionId: subscription.id,
           changes: deleteResult.meta?.changes || 0
         }, 200, request);
       } catch (error) {
