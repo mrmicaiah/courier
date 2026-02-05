@@ -404,7 +404,8 @@ export async function handleEnrollInSequence(sequenceId, request, env) {
       let nextSendAt;
       
       if (firstStep) {
-        if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
+        // If delay is 0, send immediately (send_at_time only applies to delayed steps)
+        if (firstStep.delay_minutes === 0) {
           nextSendAt = now.toISOString();
         } else {
           nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
@@ -431,9 +432,9 @@ export async function handleEnrollInSequence(sequenceId, request, env) {
     const now = new Date();
     let nextSendAt;
     
-    // If delay is 0 AND no send_at_time, send immediately
-    // Otherwise, calculate based on send_at_time
-    if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
+    // If delay is 0, send immediately (send_at_time only applies to delayed steps)
+    // Otherwise, calculate based on delay and send_at_time
+    if (firstStep.delay_minutes === 0) {
       nextSendAt = now.toISOString();
     } else {
       nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
@@ -556,8 +557,8 @@ export async function enrollInSequence(env, subscriptionId, sequenceId) {
     const now = new Date();
     let nextSendAt;
     
-    // If delay is 0 AND no send_at_time, send immediately
-    if (firstStep.delay_minutes === 0 && !firstStep.send_at_time) {
+    // If delay is 0, send immediately (send_at_time only applies to delayed steps)
+    if (firstStep.delay_minutes === 0) {
       nextSendAt = now.toISOString();
     } else {
       nextSendAt = calculateNextSendAtForEnrollment(firstStep, sequence.send_timezone || 'America/Chicago');
