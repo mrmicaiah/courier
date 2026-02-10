@@ -1,5 +1,6 @@
 /**
  * Legacy handlers - backward compatible endpoints
+ * Updated: 2026-02-10 - Added enrollBySubscribeTrigger fallback for subscribe-triggered sequences
  */
 
 import { generateId, generateSlug, jsonResponse, isValidEmail, isDisposableEmail, sanitizeString, sendEmailViaSES } from './lib.js';
@@ -93,6 +94,31 @@ async function enrollByTags(env, subscriptionId, listId, tags) {
     }
   } catch (error) {
     console.error('enrollByTags error:', error);
+  }
+}
+
+/**
+ * Enroll a subscription in active subscribe-triggered sequences for a list.
+ * Fallback when list.welcome_sequence_id is not set - queries sequences table directly.
+ * This covers sequences activated via MCP tools which don't set welcome_sequence_id.
+ */
+async function enrollBySubscribeTrigger(env, subscriptionId, listId) {
+  try {
+    // Find all active subscribe-triggered sequences for this list
+    // 3 placeholders, 3 bind values
+    const sequences = await env.DB.prepare(`
+      SELECT id FROM sequences 
+      WHERE list_id = ? AND trigger_type = ? AND status = ?
+    `).bind(listId, 'subscribe', 'active').all();
+    
+    if (!sequences.results || sequences.results.length === 0) return;
+    
+    for (const sequence of sequences.results) {
+      console.log(`Subscribe trigger: enrolling in sequence ${sequence.id}`);
+      await enrollInSequence(env, subscriptionId, sequence.id);
+    }
+  } catch (error) {
+    console.error('enrollBySubscribeTrigger error:', error);
   }
 }
 
@@ -350,6 +376,10 @@ export async function handleSubscribe(request, env) {
       // Welcome sequence (subscribe trigger)
       if (list.welcome_sequence_id) {
         await enrollInSequence(env, subscriptionId, list.welcome_sequence_id);
+      } else {
+        // Fallback: find active subscribe-triggered sequences for this list
+        // Covers sequences activated via MCP that didn't set welcome_sequence_id
+        await enrollBySubscribeTrigger(env, subscriptionId, list.id);
       }
       
       // Tag-based sequence enrollment - use the new tags only
