@@ -2,7 +2,7 @@
  * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + Resend
  * Deployed via Cloudflare Git Integration
- * Build fix: 2026-02-04 - MTC delete: handle FK constraints
+ * Build fix: 2026-02-10 - Bump deploy to fix stale version
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
