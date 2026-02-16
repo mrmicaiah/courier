@@ -1,7 +1,7 @@
 /**
  * Courier MCP Server
  * Exposes email marketing tools directly to Claude via MCP protocol
- * Updated: 2026-02-10 - Fix: link welcome_sequence_id when activating subscribe-triggered sequences via MCP
+ * Updated: 2026-02-16 - Add courier_add_subscriber tool
  */
 
 import { generateId } from './lib.js';
@@ -41,9 +41,15 @@ const TOOLS = [
   { name: "courier_enroll_in_sequence", description: "Enroll an email in a sequence", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, email: { type: "string" } }, required: ["sequence_id", "email"] } },
   { name: "courier_sequence_enrollments", description: "List sequence enrollments", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, status: { type: "string", enum: ["active", "completed", "cancelled"] }, limit: { type: "number", default: 50 } }, required: ["sequence_id"] } },
   { name: "courier_list_subscribers", description: "List subscribers", inputSchema: { type: "object", properties: { list_id: { type: "string" }, limit: { type: "number", default: 50 } }, required: [] } },
+  { name: "courier_add_subscriber", description: "Add a subscriber to a list. Creates the lead if they don't exist. Reactivates if previously unsubscribed.", inputSchema: { type: "object", properties: { list_id: { type: "string", description: "List ID or slug" }, email: { type: "string", description: "Subscriber email address" }, name: { type: "string", description: "Subscriber name (optional)" } }, required: ["list_id", "email"] } },
   { name: "courier_delete_subscriber", description: "Delete/unsubscribe subscribers", inputSchema: { type: "object", properties: { subscription_id: { type: "string" }, subscription_ids: { type: "array", items: { type: "string" } }, permanent: { type: "boolean", default: false } }, required: [] } },
   { name: "courier_stats", description: "Get overall platform statistics including opens, clicks, unsubscribes, and performance metrics", inputSchema: { type: "object", properties: {}, required: [] } }
 ];
+
+// Simple email validation
+function isValidEmail(email) {
+  return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
 async function executeTool(name, args, env) {
   const db = env.DB;
@@ -464,6 +470,70 @@ async function executeTool(name, args, env) {
       for (const s of results.results.slice(0, 30)) out += `• ${s.name || '(no name)'} <${s.email}>\n  ID: ${s.subscription_id || s.id}\n`;
       if (results.results.length > 30) out += `\n... and ${results.results.length - 30} more`;
       return out;
+    }
+    // ==================== NEW: courier_add_subscriber ====================
+    case "courier_add_subscriber": {
+      // Validate email
+      if (!args.email || !isValidEmail(args.email)) {
+        return "⛔ Valid email address required";
+      }
+      
+      // Find list by ID or slug
+      // Bind audit: 2 ?, 2 binds ✅
+      let list = await db.prepare('SELECT * FROM lists WHERE id = ? OR slug = ?')
+        .bind(args.list_id, args.list_id).first();
+      if (!list) {
+        return "⛔ List not found";
+      }
+      
+      const email = args.email.toLowerCase().trim();
+      const now = new Date().toISOString();
+      
+      // Check if lead exists
+      // Bind audit: 1 ?, 1 bind ✅
+      let lead = await db.prepare('SELECT * FROM leads WHERE email = ?')
+        .bind(email).first();
+      let leadId;
+      
+      if (!lead) {
+        // Create new lead
+        // Bind audit: 5 ?, 5 binds ✅
+        const result = await db.prepare(`
+          INSERT INTO leads (email, name, source, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(email, args.name || null, 'manual', now, now).run();
+        leadId = result.meta.last_row_id;
+      } else {
+        leadId = lead.id;
+      }
+      
+      // Check for existing subscription
+      // Bind audit: 2 ?, 2 binds ✅
+      const existingSub = await db.prepare(
+        'SELECT * FROM subscriptions WHERE lead_id = ? AND list_id = ?'
+      ).bind(leadId, list.id).first();
+      
+      if (existingSub) {
+        if (existingSub.status === 'active') {
+          return `⚠️ **${email}** is already subscribed to **${list.name}**`;
+        }
+        // Reactivate
+        // Bind audit: 2 ?, 2 binds ✅
+        await db.prepare(`
+          UPDATE subscriptions SET status = 'active', unsubscribed_at = NULL, subscribed_at = ? WHERE id = ?
+        `).bind(now, existingSub.id).run();
+        return `✅ Reactivated **${email}** on **${list.name}**\nSubscription ID: ${existingSub.id}`;
+      }
+      
+      // Create new subscription
+      const subId = generateId();
+      // Bind audit: 6 ?, 6 binds ✅
+      await db.prepare(`
+        INSERT INTO subscriptions (id, lead_id, list_id, status, source, subscribed_at, created_at)
+        VALUES (?, ?, ?, 'active', 'manual', ?, ?)
+      `).bind(subId, leadId, list.id, now, now).run();
+      
+      return `✅ Added **${email}**${args.name ? ` (${args.name})` : ''} to **${list.name}**\nSubscription ID: ${subId}`;
     }
     case "courier_delete_subscriber": {
       const ids = args.subscription_ids || (args.subscription_id ? [args.subscription_id] : []);
