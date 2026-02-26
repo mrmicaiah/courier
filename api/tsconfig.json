@@ -1,2 +1,11 @@
-# TypeScript config for future MCP migration
-# Currently unused - main entry is index.js
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [],
+  "exclude": ["**/*"]
+}
