@@ -1,16 +1,21 @@
 {
   "name": "courier-api",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Courier - Email marketing platform",
-  "main": "index.js",
+  "main": "src/index.ts",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "marked": "^12.0.0"
+    "agents": "^0.3.0",
+    "marked": "^12.0.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
   }
 }
