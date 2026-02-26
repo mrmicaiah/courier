@@ -12,6 +12,7 @@ export function registerStatsTools(ctx: ToolContext) {
     "Get overall platform statistics including opens, clicks, unsubscribes, and performance metrics",
     {},
     async () => {
+      // Test deployment - v2.0.1
       let totalLeads = 0, todayLeads = 0, weekLeads = 0, monthLeads = 0;
       let activeSubs = 0, unsubscribed = 0;
       let emailStats = { total_sends: 0, opens: 0, clicks: 0, bounces: 0 };
