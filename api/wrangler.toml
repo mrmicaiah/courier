@@ -1,12 +1,21 @@
 name = "email-bot-server"
-main = "index.js"
-compatibility_date = "2024-09-23"
+main = "src/index.ts"
+compatibility_date = "2025-03-10"
 compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "email-bot-db"
 database_id = "1f723e35-3d79-4f80-92a0-b73b9569a310"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CourierMCP"]
+
+[durable_objects]
+bindings = [
+  { name = "MCP_OBJECT", class_name = "CourierMCP" }
+]
 
 [triggers]
 crons = ["*/15 * * * *"]
