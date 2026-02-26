@@ -75,7 +75,9 @@ export default {
     const url = new URL(request.url);
     
     // === MCP SERVER ENDPOINT (new SDK-based handler) ===
-    if (url.pathname === '/sse' || url.pathname === '/mcp') {
+    // Handle /sse, /sse/message, /mcp, and /mcp/message
+    if (url.pathname === '/sse' || url.pathname.startsWith('/sse/') || 
+        url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
       return CourierMCP.serveSSE("/sse").fetch(request, env, ctx);
     }
     
