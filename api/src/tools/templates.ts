@@ -1,6 +1,5 @@
 /**
  * Template Management Tools
- * Placeholder - will be populated with full implementation
  */
 
 import { z } from "zod";
@@ -44,6 +43,7 @@ export function registerTemplateTools(ctx: ToolContext) {
     if (!t) {
       return { content: [{ type: "text", text: "⛔ Template not found" }] };
     }
+    
     return { content: [{ type: "text", text: `📧 **${t.name}**\n\nID: ${t.id}\nCategory: ${t.category || '(none)'}\nSubject: ${t.subject || '(none)'}\nDescription: ${t.description || '(none)'}\nCreated: ${t.created_at}\n\n---\n\n**HTML Preview:**\n\`\`\`html\n${t.body_html?.slice(0, 500)}${t.body_html?.length > 500 ? '...' : ''}\n\`\`\`` }] };
   });
 
@@ -57,9 +57,10 @@ export function registerTemplateTools(ctx: ToolContext) {
   }, async ({ name, subject, body_html, description, category, list_id }) => {
     const id = generateId();
     const now = new Date().toISOString();
-    await env.DB.prepare(
-      'INSERT INTO templates (id, name, subject, body_html, description, category, list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(id, name, subject, body_html, description || null, category || null, list_id || null, now, now).run();
+    
+    await env.DB.prepare('INSERT INTO templates (id, name, subject, body_html, description, category, list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, name, subject, body_html, description || null, category || null, list_id || null, now, now).run();
+    
     return { content: [{ type: "text", text: `✅ Template created: **${name}**\nID: ${id}` }] };
   });
 
