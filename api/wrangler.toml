@@ -8,7 +8,6 @@ binding = "DB"
 database_name = "email-bot-db"
 database_id = "1f723e35-3d79-4f80-92a0-b73b9569a310"
 
-# Durable Objects for MCP SDK
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["CourierMCP"]
@@ -18,7 +17,6 @@ bindings = [
   { name = "MCP_OBJECT", class_name = "CourierMCP" }
 ]
 
-# Cron triggers for automated email processing
 [triggers]
 crons = ["*/15 * * * *"]
 
