@@ -2,7 +2,7 @@
  * Courier - Email Marketing Platform
  * Cloudflare Worker + D1 Database + Resend
  * Deployed via Cloudflare Git Integration
- * Build fix: 2026-02-10 - Bump deploy to fix stale version
+ * Build: 2026-03-04-v2 - MCP email sending fix
  */
 
 import { checkAuth, getCorsHeaders, jsonResponse, CORS_HEADERS } from './lib.js';
@@ -24,6 +24,9 @@ const MTC_ALLOWED_LISTS = ['meet-the-contractors-vendors', 'meet-the-contractors
 
 // Dashboard PIN codes
 const DASHBOARD_PINS = ['1976', '1987'];
+
+// Version for deployment verification
+const BUILD_VERSION = '2026-03-04-v2';
 
 export default {
   async fetch(request, env) {
@@ -66,7 +69,11 @@ export default {
     
     // === PUBLIC ENDPOINTS (no auth required) ===
     if (url.pathname === '/health') {
-      return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+      return jsonResponse({ 
+        status: 'ok', 
+        version: BUILD_VERSION,
+        timestamp: new Date().toISOString() 
+      });
     }
     
     if (url.pathname === '/api/lead' && request.method === 'POST') {
