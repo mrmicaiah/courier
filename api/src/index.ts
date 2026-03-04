@@ -3,10 +3,14 @@
  * Cloudflare Worker + D1 Database + Resend
  * 
  * TypeScript version with MCP SDK for stable SSE connections
+ * Build: 2026-03-04-v4 - Fix MCP email sending tools
  */
 
 import { CourierMCP } from './mcp';
 import { Env } from './types';
+
+// Version for deployment verification
+const BUILD_VERSION = '2026-03-04-v4';
 
 // Re-export the MCP class for Durable Objects
 export { CourierMCP };
@@ -86,7 +90,7 @@ export default {
       return new Response(JSON.stringify({ 
         ok: true, 
         pathname: url.pathname,
-        version: '2.0.0-mcp-sdk',
+        version: BUILD_VERSION,
         timestamp: new Date().toISOString()
       }), {
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
@@ -99,7 +103,7 @@ export default {
       return jsonResponse({
         hasApiKey: !!env.ADMIN_API_KEY,
         apiKeyLength: env.ADMIN_API_KEY ? env.ADMIN_API_KEY.length : 0,
-        version: '2.0.0-mcp-sdk',
+        version: BUILD_VERSION,
         authHeader: authHeader ? authHeader.substring(0, 20) + '...' : null,
         timestamp: new Date().toISOString()
       });
@@ -107,7 +111,7 @@ export default {
     
     // === PUBLIC ENDPOINTS (no auth required) ===
     if (url.pathname === '/health') {
-      return jsonResponse({ status: 'ok', version: '2.0.0-mcp-sdk', timestamp: new Date().toISOString() });
+      return jsonResponse({ status: 'ok', version: BUILD_VERSION, timestamp: new Date().toISOString() });
     }
     
     if (url.pathname === '/api/lead' && request.method === 'POST') {
