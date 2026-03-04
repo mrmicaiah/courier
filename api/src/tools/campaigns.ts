@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import type { ToolContext } from '../types';
-import { generateId } from '../lib';
+import { generateId, isValidEmail, sendEmailViaSES, renderEmail } from '../lib';
 
 export function registerCampaignTools(ctx: ToolContext) {
   const { server, env } = ctx;
@@ -279,30 +279,175 @@ export function registerCampaignTools(ctx: ToolContext) {
     }
   );
 
+  // ==================== FIXED: Actually sends test email via Resend ====================
   server.tool(
     "courier_send_test",
-    "Send a test email",
+    "Send a test email to a specific address",
     {
       campaign_id: z.string(),
       email: z.string()
     },
     async ({ campaign_id, email }) => {
-      return { content: [{ type: "text", text: `✅ Test email would be sent to **${email}**\n\n(Note: Actual sending requires campaign send endpoint)` }] };
+      // Validate email
+      if (!email || !isValidEmail(email)) {
+        return { content: [{ type: "text", text: "⛔ Valid email address required" }] };
+      }
+      
+      // Get campaign with list info
+      const emailRecord = await env.DB.prepare(`
+        SELECT e.*, l.from_name, l.from_email, l.campaign_template_id 
+        FROM emails e 
+        LEFT JOIN lists l ON e.list_id = l.id 
+        WHERE e.id = ?
+      `).bind(campaign_id).first() as any;
+      
+      if (!emailRecord) {
+        return { content: [{ type: "text", text: "⛔ Campaign not found" }] };
+      }
+      
+      // Get template if list has one
+      let template: any = null;
+      if (emailRecord.campaign_template_id) {
+        template = await env.DB.prepare('SELECT * FROM templates WHERE id = ?')
+          .bind(emailRecord.campaign_template_id).first();
+      }
+      
+      // Create fake subscriber for rendering
+      const fakeSubscriber = { name: 'Test User', email: email };
+      const fakeSendId = 'test-' + generateId();
+      const baseUrl = 'https://email-bot-server.micaiah-tasks.workers.dev';
+      
+      // Render the email with template
+      const renderedHtml = renderEmail(emailRecord, fakeSubscriber, fakeSendId, baseUrl, emailRecord, template);
+      
+      try {
+        // Actually send via Resend
+        const messageId = await sendEmailViaSES(
+          env,
+          email,
+          '[TEST] ' + emailRecord.subject,
+          renderedHtml,
+          emailRecord.body_text,
+          emailRecord.from_name,
+          emailRecord.from_email
+        );
+        
+        return { content: [{ type: "text", text: `✅ Test email sent to **${email}**\nResend Message ID: ${messageId}\nUsed template: ${template ? template.name : 'none'}` }] };
+      } catch (err: any) {
+        console.error('Send test email error:', err);
+        return { content: [{ type: "text", text: `⛔ Failed to send test email: ${err.message}` }] };
+      }
     }
   );
 
+  // ==================== FIXED: Actually sends to all subscribers via Resend ====================
   server.tool(
     "courier_send_now",
-    "Send a campaign immediately",
+    "Send a campaign immediately to all subscribers",
     {
       campaign_id: z.string()
     },
     async ({ campaign_id }) => {
-      const now = new Date().toISOString();
-      await env.DB.prepare('UPDATE emails SET status = ?, sent_at = ?, updated_at = ? WHERE id = ?')
-        .bind('sent', now, now, campaign_id).run();
+      // Get campaign with list info
+      const emailRecord = await env.DB.prepare(`
+        SELECT e.*, l.from_name, l.from_email, l.campaign_template_id 
+        FROM emails e 
+        LEFT JOIN lists l ON e.list_id = l.id 
+        WHERE e.id = ?
+      `).bind(campaign_id).first() as any;
       
-      return { content: [{ type: "text", text: `✅ Campaign marked as sent\n\n(Note: Actual sending processes via cron)` }] };
+      if (!emailRecord) {
+        return { content: [{ type: "text", text: "⛔ Campaign not found" }] };
+      }
+      if (emailRecord.status === 'sent') {
+        return { content: [{ type: "text", text: "⛔ Campaign already sent" }] };
+      }
+      
+      // Get template if list has one
+      let template: any = null;
+      if (emailRecord.campaign_template_id) {
+        template = await env.DB.prepare('SELECT * FROM templates WHERE id = ?')
+          .bind(emailRecord.campaign_template_id).first();
+      }
+      
+      // Get subscribers
+      let subscribers: any;
+      if (emailRecord.list_id) {
+        subscribers = await env.DB.prepare(`
+          SELECT l.id, l.email, l.name, s.id as subscription_id
+          FROM subscriptions s
+          JOIN leads l ON s.lead_id = l.id
+          WHERE s.list_id = ? AND s.status = 'active'
+        `).bind(emailRecord.list_id).all();
+      } else {
+        // Send to all non-bounced leads
+        subscribers = await env.DB.prepare(`
+          SELECT id, email, name FROM leads 
+          WHERE unsubscribed_at IS NULL AND (bounce_count IS NULL OR bounce_count < 3)
+        `).all();
+      }
+      
+      if (!subscribers.results || subscribers.results.length === 0) {
+        // Mark as sent with 0 count
+        const now = new Date().toISOString();
+        await env.DB.prepare(`
+          UPDATE emails SET status = 'sent', sent_at = ?, sent_count = 0, updated_at = ? WHERE id = ?
+        `).bind(now, now, campaign_id).run();
+        
+        return { content: [{ type: "text", text: "⚠️ No active subscribers found - campaign marked as sent with 0 recipients" }] };
+      }
+      
+      const baseUrl = 'https://email-bot-server.micaiah-tasks.workers.dev';
+      let sent = 0;
+      let failed = 0;
+      const errors: { email: string; error: string }[] = [];
+      
+      // Send to each subscriber
+      for (const subscriber of subscribers.results as any[]) {
+        try {
+          const sendId = generateId();
+          const renderedHtml = renderEmail(emailRecord, subscriber, sendId, baseUrl, emailRecord, template);
+          
+          const messageId = await sendEmailViaSES(
+            env,
+            subscriber.email,
+            emailRecord.subject,
+            renderedHtml,
+            emailRecord.body_text,
+            emailRecord.from_name,
+            emailRecord.from_email
+          );
+          
+          // Record the send
+          await env.DB.prepare(`
+            INSERT INTO email_sends (id, email_id, lead_id, subscription_id, ses_message_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'sent', ?)
+          `).bind(sendId, campaign_id, subscriber.id, subscriber.subscription_id || null, messageId, new Date().toISOString()).run();
+          
+          sent++;
+        } catch (e: any) {
+          failed++;
+          errors.push({ email: subscriber.email, error: e.message });
+          console.error('Failed to send to ' + subscriber.email + ':', e);
+        }
+      }
+      
+      // Update campaign status
+      const now = new Date().toISOString();
+      await env.DB.prepare(`
+        UPDATE emails SET status = 'sent', sent_at = ?, sent_count = ?, updated_at = ? WHERE id = ?
+      `).bind(now, sent, now, campaign_id).run();
+      
+      let out = `✅ **Campaign sent!**\n\n• Delivered: ${sent}\n• Failed: ${failed}\n• Total: ${subscribers.results.length}`;
+      if (template) out += `\n• Template: ${template.name}`;
+      if (errors.length > 0) {
+        out += `\n\n**Errors (first 5):**`;
+        for (const err of errors.slice(0, 5)) {
+          out += `\n• ${err.email}: ${err.error}`;
+        }
+      }
+      
+      return { content: [{ type: "text", text: out }] };
     }
   );
 }
