@@ -9,18 +9,30 @@ import { generateId, isValidEmail } from '../lib';
 export function registerSubscriberTools(ctx: ToolContext) {
   const { server, env } = ctx;
 
+  // ==================== FIXED: Now resolves slug to UUID before querying ====================
   server.tool(
     "courier_list_subscribers",
-    "List subscribers",
+    "List subscribers for a list",
     {
-      list_id: z.string().optional(),
+      list_id: z.string().optional().describe("List ID or slug"),
       limit: z.number().optional().default(50)
     },
     async ({ list_id, limit }) => {
-      let query, params;
+      let query: string;
+      let params: any[];
+      
       if (list_id) {
+        // First resolve the list by ID or slug
+        const list = await env.DB.prepare('SELECT id, name FROM lists WHERE id = ? OR slug = ?')
+          .bind(list_id, list_id).first() as any;
+        
+        if (!list) {
+          return { content: [{ type: "text", text: "⛔ List not found" }] };
+        }
+        
+        // Use the resolved UUID
         query = "SELECT s.id as subscription_id, s.subscribed_at, l.email, l.name FROM subscriptions s JOIN leads l ON s.lead_id = l.id WHERE s.list_id = ? AND s.status = 'active' ORDER BY s.subscribed_at DESC LIMIT ?";
-        params = [list_id, limit || 50];
+        params = [list.id, limit || 50];
       } else {
         query = 'SELECT l.id, l.email, l.name, l.created_at FROM leads l ORDER BY l.created_at DESC LIMIT ?';
         params = [limit || 50];
