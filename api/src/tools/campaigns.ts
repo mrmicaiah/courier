@@ -279,7 +279,7 @@ export function registerCampaignTools(ctx: ToolContext) {
     }
   );
 
-  // ==================== FIXED: Actually sends test email via Resend ====================
+  // ==================== Sends email exactly as subscribers would receive it ====================
   server.tool(
     "courier_send_test",
     "Send a test email to a specific address",
@@ -321,11 +321,11 @@ export function registerCampaignTools(ctx: ToolContext) {
       const renderedHtml = renderEmail(emailRecord, fakeSubscriber, fakeSendId, baseUrl, emailRecord, template);
       
       try {
-        // Actually send via Resend
+        // Send via Resend - exact same subject as real sends
         const messageId = await sendEmailViaSES(
           env,
           email,
-          '[TEST] ' + emailRecord.subject,
+          emailRecord.subject,
           renderedHtml,
           emailRecord.body_text,
           emailRecord.from_name,
@@ -340,7 +340,7 @@ export function registerCampaignTools(ctx: ToolContext) {
     }
   );
 
-  // ==================== FIXED: Actually sends to all subscribers via Resend ====================
+  // ==================== Sends to all subscribers via Resend ====================
   server.tool(
     "courier_send_now",
     "Send a campaign immediately to all subscribers",
