@@ -290,6 +290,7 @@ export function registerSequenceTools(ctx: ToolContext) {
     }
   );
 
+  // ==================== FIXED: Now sets current_step=0 and next_send_at ====================
   server.tool(
     "courier_enroll_in_sequence",
     "Enroll an email in a sequence",
@@ -313,13 +314,44 @@ export function registerSequenceTools(ctx: ToolContext) {
         return { content: [{ type: "text", text: "⛔ Lead is not subscribed to this sequence's list" }] };
       }
       
+      // Check if already enrolled
+      const existing = await env.DB.prepare('SELECT id, status FROM sequence_enrollments WHERE subscription_id = ? AND sequence_id = ?')
+        .bind(sub.id, sequence_id).first() as any;
+      if (existing) {
+        if (existing.status === 'active') {
+          return { content: [{ type: "text", text: `⚠️ **${email}** is already enrolled in this sequence` }] };
+        }
+        // Re-enroll if completed/cancelled
+        const now = new Date().toISOString();
+        await env.DB.prepare('UPDATE sequence_enrollments SET status = ?, current_step = 0, next_send_at = ?, enrolled_at = ? WHERE id = ?')
+          .bind('active', now, now, existing.id).run();
+        return { content: [{ type: "text", text: `✅ Re-enrolled **${email}** in sequence\nEnrollment ID: ${existing.id}` }] };
+      }
+      
+      // Get first step to calculate initial next_send_at
+      const firstStep = await env.DB.prepare('SELECT delay_minutes, send_at_time FROM sequence_steps WHERE sequence_id = ? AND position = 1 AND status = ?')
+        .bind(sequence_id, 'active').first() as any;
+      
       const id = generateId();
       const now = new Date().toISOString();
       
-      await env.DB.prepare('INSERT INTO sequence_enrollments (id, subscription_id, sequence_id, current_step, status, enrolled_at, created_at) VALUES (?, ?, ?, 1, \'active\', ?, ?)')
-        .bind(id, sub.id, sequence_id, now, now).run();
+      // Calculate next_send_at based on first step's delay
+      let nextSendAt: string;
+      if (!firstStep || (firstStep.delay_minutes === 0 && !firstStep.send_at_time)) {
+        // Immediate send
+        nextSendAt = now;
+      } else {
+        // Calculate delay
+        const delayMs = (firstStep.delay_minutes || 0) * 60 * 1000;
+        nextSendAt = new Date(Date.now() + delayMs).toISOString();
+      }
       
-      return { content: [{ type: "text", text: `✅ Enrolled **${email}** in sequence\nEnrollment ID: ${id}` }] };
+      // current_step = 0 means no steps have been sent yet
+      // The cron looks for position = current_step + 1, so position 1 (first step) will be picked up
+      await env.DB.prepare('INSERT INTO sequence_enrollments (id, subscription_id, sequence_id, current_step, next_send_at, status, enrolled_at, created_at) VALUES (?, ?, ?, 0, ?, \'active\', ?, ?)')
+        .bind(id, sub.id, sequence_id, nextSendAt, now, now).run();
+      
+      return { content: [{ type: "text", text: `✅ Enrolled **${email}** in sequence\nEnrollment ID: ${id}\nFirst email scheduled: ${firstStep?.delay_minutes === 0 ? 'immediately' : 'based on step delay'}` }] };
     }
   );
 
