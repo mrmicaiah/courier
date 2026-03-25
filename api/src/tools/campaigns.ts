@@ -1,5 +1,6 @@
 /**
  * Campaign Management Tools
+ * Build: 2026-03-25-v1 - Fix list slug resolution
  */
 
 import { z } from "zod";
@@ -92,10 +93,28 @@ export function registerCampaignTools(ctx: ToolContext) {
       const id = generateId();
       const now = new Date().toISOString();
       
-      await env.DB.prepare('INSERT INTO emails (id, subject, body_html, list_id, title, preview_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, \'draft\', ?, ?)')
-        .bind(id, subject, body_html, list_id || null, title || null, preview_text || null, now, now).run();
+      // Resolve list_id if provided (could be slug or UUID)
+      let resolvedListId: string | null = null;
+      let listName: string | null = null;
       
-      return { content: [{ type: "text", text: `✅ Campaign created: **${subject}**\nID: ${id}\nStatus: draft` }] };
+      if (list_id) {
+        const list = await env.DB.prepare('SELECT id, name FROM lists WHERE id = ? OR slug = ?')
+          .bind(list_id, list_id).first() as any;
+        if (list) {
+          resolvedListId = list.id;
+          listName = list.name;
+        } else {
+          return { content: [{ type: "text", text: `⛔ List not found: ${list_id}` }] };
+        }
+      }
+      
+      await env.DB.prepare('INSERT INTO emails (id, subject, body_html, list_id, title, preview_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, \'draft\', ?, ?)')
+        .bind(id, subject, body_html, resolvedListId, title || null, preview_text || null, now, now).run();
+      
+      let out = `✅ Campaign created: **${subject}**\nID: ${id}\nStatus: draft`;
+      if (listName) out += `\nList: ${listName}`;
+      
+      return { content: [{ type: "text", text: out }] };
     }
   );
 
@@ -116,9 +135,25 @@ export function registerCampaignTools(ctx: ToolContext) {
       
       if (args.subject !== undefined) { updates.push('subject = ?'); values.push(args.subject); }
       if (args.body_html !== undefined) { updates.push('body_html = ?'); values.push(args.body_html); }
-      if (args.list_id !== undefined) { updates.push('list_id = ?'); values.push(args.list_id); }
       if (args.title !== undefined) { updates.push('title = ?'); values.push(args.title); }
       if (args.preview_text !== undefined) { updates.push('preview_text = ?'); values.push(args.preview_text); }
+      
+      // Resolve list_id if provided (could be slug or UUID)
+      if (args.list_id !== undefined) {
+        if (args.list_id) {
+          const list = await env.DB.prepare('SELECT id FROM lists WHERE id = ? OR slug = ?')
+            .bind(args.list_id, args.list_id).first() as any;
+          if (list) {
+            updates.push('list_id = ?');
+            values.push(list.id);
+          } else {
+            return { content: [{ type: "text", text: `⛔ List not found: ${args.list_id}` }] };
+          }
+        } else {
+          updates.push('list_id = ?');
+          values.push(null);
+        }
+      }
       
       if (updates.length === 0) {
         return { content: [{ type: "text", text: "⛔ No updates provided" }] };
