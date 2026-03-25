@@ -3,14 +3,14 @@
  * Cloudflare Worker + D1 Database + Resend
  * 
  * TypeScript version with MCP SDK for stable SSE connections
- * Build: 2026-03-04-v4 - Fix MCP email sending tools
+ * Build: 2026-03-25-v1 - Fix list slug resolution in MCP campaign tools
  */
 
 import { CourierMCP } from './mcp';
 import { Env } from './types';
 
 // Version for deployment verification
-const BUILD_VERSION = '2026-03-04-v4';
+const BUILD_VERSION = '2026-03-25-v1';
 
 // Re-export the MCP class for Durable Objects
 export { CourierMCP };
