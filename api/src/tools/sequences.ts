@@ -1,5 +1,6 @@
 /**
  * Sequence Management Tools
+ * Updated: 2026-04-01 - Added next_send_at to enrollment display for debugging
  */
 
 import { z } from "zod";
@@ -50,7 +51,7 @@ export function registerSequenceTools(ctx: ToolContext) {
 
   server.tool(
     "courier_get_sequence",
-    "Get sequence details with steps",
+    "Get sequence details with steps. Shows delay and send_at_time for each step.",
     {
       sequence_id: z.string()
     },
@@ -68,7 +69,7 @@ export function registerSequenceTools(ctx: ToolContext) {
       if (s.trigger_type === 'tag' && s.trigger_value) triggerDisplay = `tag: "${s.trigger_value}"`;
       else if (s.trigger_value) triggerDisplay = `${s.trigger_type} (${s.trigger_value})`;
       
-      let out = `${icon} **${s.name}**\n\n**ID:** ${s.id}\n**Status:** ${s.status}\n**List:** ${s.list_name || '(none)'}\n**Trigger:** ${triggerDisplay}\n`;
+      let out = `${icon} **${s.name}**\n\n**ID:** ${s.id}\n**Status:** ${s.status}\n**List:** ${s.list_name || '(none)'}\n**Trigger:** ${triggerDisplay}\n**Timezone:** ${s.send_timezone || 'America/Chicago'}\n`;
       if (s.description) out += `**Description:** ${s.description}\n`;
       out += `\n**Enrollments:**\n• Total: ${stats?.total || 0}\n• Active: ${stats?.active || 0}\n• Completed: ${stats?.completed || 0}\n• Cancelled: ${stats?.cancelled || 0}\n`;
       
@@ -76,8 +77,8 @@ export function registerSequenceTools(ctx: ToolContext) {
         out += `\n**Steps:**\n`;
         for (const step of steps.results as any[]) {
           const delay = step.delay_minutes === 0 ? 'Immediately' : step.delay_minutes < 60 ? `${step.delay_minutes}m` : step.delay_minutes < 1440 ? `${Math.round(step.delay_minutes / 60)}h` : `${Math.round(step.delay_minutes / 1440)}d`;
-          const sendTime = step.send_at_time ? ` @ ${step.send_at_time}` : '';
-          out += `${step.position}. [${delay}${sendTime}] ${step.subject}${step.status !== 'active' ? ` (${step.status})` : ''}\n   ID: ${step.id}\n`;
+          const sendTime = step.send_at_time ? ` @ ${step.send_at_time}` : ' (no time set)';
+          out += `${step.position}. [${delay}${sendTime}] ${step.subject}${step.status !== 'active' ? ` (${step.status})` : ''}\n   delay_minutes: ${step.delay_minutes}, send_at_time: ${step.send_at_time || 'null'}\n   ID: ${step.id}\n`;
         }
       } else {
         out += `\n⚠️ No steps configured yet.`;
@@ -181,14 +182,14 @@ export function registerSequenceTools(ctx: ToolContext) {
 
   server.tool(
     "courier_add_sequence_step",
-    "Add a step to a sequence",
+    "Add a step to a sequence. Note: For immediate sends, leave send_at_time empty/null.",
     {
       sequence_id: z.string(),
       subject: z.string(),
       body_html: z.string(),
       delay_minutes: z.number().optional().default(0).describe("0=immediate, 1440=1 day, 10080=1 week"),
       preview_text: z.string().optional(),
-      send_at_time: z.string().optional().describe("Specific time to send (HH:MM in 24h format, e.g. '09:00')")
+      send_at_time: z.string().optional().describe("Specific time to send (HH:MM in 24h format). Leave empty for immediate sends.")
     },
     async ({ sequence_id, subject, body_html, delay_minutes, preview_text, send_at_time }) => {
       const id = generateId();
@@ -196,6 +197,7 @@ export function registerSequenceTools(ctx: ToolContext) {
       
       const last = await env.DB.prepare('SELECT MAX(position) as pos FROM sequence_steps WHERE sequence_id = ?').bind(sequence_id).first() as any;
       const position = (last?.pos || 0) + 1;
+      // Only set send_at_time if explicitly provided - don't default to 09:00
       const sendAtTime = send_at_time || null;
       
       await env.DB.prepare('INSERT INTO sequence_steps (id, sequence_id, position, subject, body_html, delay_minutes, preview_text, send_at_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'active\', ?, ?)')
@@ -336,8 +338,9 @@ export function registerSequenceTools(ctx: ToolContext) {
       const now = new Date().toISOString();
       
       // Calculate next_send_at based on first step's delay
+      // For delay_minutes = 0, send immediately regardless of send_at_time
       let nextSendAt: string;
-      if (!firstStep || (firstStep.delay_minutes === 0 && !firstStep.send_at_time)) {
+      if (!firstStep || firstStep.delay_minutes === 0) {
         // Immediate send
         nextSendAt = now;
       } else {
@@ -351,19 +354,24 @@ export function registerSequenceTools(ctx: ToolContext) {
       await env.DB.prepare('INSERT INTO sequence_enrollments (id, subscription_id, sequence_id, current_step, next_send_at, status, enrolled_at, created_at) VALUES (?, ?, ?, 0, ?, \'active\', ?, ?)')
         .bind(id, sub.id, sequence_id, nextSendAt, now, now).run();
       
-      return { content: [{ type: "text", text: `✅ Enrolled **${email}** in sequence\nEnrollment ID: ${id}\nFirst email scheduled: ${firstStep?.delay_minutes === 0 ? 'immediately' : 'based on step delay'}` }] };
+      return { content: [{ type: "text", text: `✅ Enrolled **${email}** in sequence\nEnrollment ID: ${id}\nNext send at: ${nextSendAt}\nFirst email: ${firstStep?.delay_minutes === 0 ? 'immediately' : 'based on step delay'}` }] };
     }
   );
 
+  // ==================== 2026-04-01: Added next_send_at to enrollment display ====================
   server.tool(
     "courier_sequence_enrollments",
-    "List sequence enrollments",
+    "List sequence enrollments with next_send_at for debugging",
     {
       sequence_id: z.string(),
       status: z.enum(["active", "completed", "cancelled"]).optional(),
       limit: z.number().optional().default(50)
     },
     async ({ sequence_id, status, limit }) => {
+      // Get current time for comparison
+      const nowQuery = await env.DB.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now') as now").first() as any;
+      const serverNow = nowQuery?.now || new Date().toISOString();
+      
       let query = 'SELECT se.*, l.email, l.name FROM sequence_enrollments se JOIN subscriptions s ON se.subscription_id = s.id JOIN leads l ON s.lead_id = l.id WHERE se.sequence_id = ?';
       const params: any[] = [sequence_id];
       
@@ -380,10 +388,16 @@ export function registerSequenceTools(ctx: ToolContext) {
         return { content: [{ type: "text", text: "📭 No enrollments found" }] };
       }
       
-      let out = `👥 **Sequence Enrollments** (${results.results.length})\n\n`;
+      let out = `👥 **Sequence Enrollments** (${results.results.length})\n`;
+      out += `🕐 Server time: ${serverNow}\n\n`;
+      
       for (const e of results.results as any[]) {
         const icon = e.status === 'active' ? '🟢' : e.status === 'completed' ? '✅' : '❌';
-        out += `${icon} ${e.name || '(no name)'} <${e.email}>\n   Step: ${e.current_step} | Enrolled: ${e.enrolled_at?.split('T')[0]}\n`;
+        const isDue = e.next_send_at && e.next_send_at <= serverNow ? '⏰ DUE' : '';
+        out += `${icon} ${e.name || '(no name)'} <${e.email}>\n`;
+        out += `   Step: ${e.current_step} | Enrolled: ${e.enrolled_at?.split('T')[0]}\n`;
+        out += `   Next send: ${e.next_send_at || 'NULL'} ${isDue}\n`;
+        out += `   ID: ${e.id}\n\n`;
       }
       
       return { content: [{ type: "text", text: out }] };
