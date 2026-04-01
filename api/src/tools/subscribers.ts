@@ -1,5 +1,6 @@
 /**
  * Subscriber Management Tools
+ * Updated: 2026-04-01 - Added tags display to courier_list_subscribers
  */
 
 import { z } from "zod";
@@ -10,9 +11,10 @@ export function registerSubscriberTools(ctx: ToolContext) {
   const { server, env } = ctx;
 
   // ==================== FIXED: Now resolves slug to UUID before querying ====================
+  // ==================== 2026-04-01: Added l.tags to show subscriber tags ====================
   server.tool(
     "courier_list_subscribers",
-    "List subscribers for a list",
+    "List subscribers for a list. Shows email, name, tags, and subscription ID.",
     {
       list_id: z.string().optional().describe("List ID or slug"),
       limit: z.number().optional().default(50)
@@ -30,11 +32,11 @@ export function registerSubscriberTools(ctx: ToolContext) {
           return { content: [{ type: "text", text: "⛔ List not found" }] };
         }
         
-        // Use the resolved UUID
-        query = "SELECT s.id as subscription_id, s.subscribed_at, l.email, l.name FROM subscriptions s JOIN leads l ON s.lead_id = l.id WHERE s.list_id = ? AND s.status = 'active' ORDER BY s.subscribed_at DESC LIMIT ?";
+        // Use the resolved UUID - now includes l.tags
+        query = "SELECT s.id as subscription_id, s.subscribed_at, l.email, l.name, l.tags FROM subscriptions s JOIN leads l ON s.lead_id = l.id WHERE s.list_id = ? AND s.status = 'active' ORDER BY s.subscribed_at DESC LIMIT ?";
         params = [list.id, limit || 50];
       } else {
-        query = 'SELECT l.id, l.email, l.name, l.created_at FROM leads l ORDER BY l.created_at DESC LIMIT ?';
+        query = 'SELECT l.id, l.email, l.name, l.tags, l.created_at FROM leads l ORDER BY l.created_at DESC LIMIT ?';
         params = [limit || 50];
       }
       
@@ -46,7 +48,21 @@ export function registerSubscriberTools(ctx: ToolContext) {
       
       let out = `👥 **Subscribers** (${results.results.length})\n\n`;
       for (const s of (results.results as any[]).slice(0, 30)) {
-        out += `• ${s.name || '(no name)'} <${s.email}>\n  ID: ${s.subscription_id || s.id}\n`;
+        // Parse tags if they exist (stored as JSON string)
+        let tagsDisplay = '';
+        if (s.tags) {
+          try {
+            const tagsArray = JSON.parse(s.tags);
+            if (Array.isArray(tagsArray) && tagsArray.length > 0) {
+              tagsDisplay = `\n  Tags: ${tagsArray.join(', ')}`;
+            }
+          } catch {
+            // If tags isn't valid JSON, show raw value
+            tagsDisplay = `\n  Tags: ${s.tags}`;
+          }
+        }
+        
+        out += `• ${s.name || '(no name)'} <${s.email}>${tagsDisplay}\n  ID: ${s.subscription_id || s.id}\n`;
       }
       if (results.results.length > 30) out += `\n... and ${results.results.length - 30} more`;
       
