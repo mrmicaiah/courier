@@ -2,14 +2,51 @@
  * Email/Campaign handlers
  * 
  * Rate limiting: Resend free tier allows 5 requests/second.
- * We add a 250ms delay between sends to stay under the limit.
+ * We use 350ms delay (~3/sec) to leave headroom for other requests.
+ * Added retry logic for 429 rate limit errors.
  */
 
 import { generateId, jsonResponse, isValidEmail, sendEmailViaSES, renderEmail } from './lib.js';
 
-// Helper to add delay between email sends (Resend rate limit: 5/sec)
+// Helper to add delay between email sends
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const SEND_DELAY_MS = 250; // 4 emails/second to stay safely under 5/sec limit
+
+// Resend allows 5 req/sec - use 350ms (~3/sec) to leave headroom
+const SEND_DELAY_MS = 350;
+
+// Retry config for rate limits
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1500; // Wait 1.5 seconds before retry
+
+/**
+ * Send email with retry logic for rate limits
+ */
+async function sendEmailWithRetry(env, to, subject, html, text, fromName, fromEmail) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await sendEmailViaSES(env, to, subject, html, text, fromName, fromEmail);
+    } catch (e) {
+      lastError = e;
+      
+      // Check if it's a rate limit error (429)
+      if (e.message && e.message.includes('429')) {
+        console.log(`Rate limited sending to ${to}, attempt ${attempt}/${MAX_RETRIES}`);
+        if (attempt < MAX_RETRIES) {
+          // Exponential backoff: 1.5s, 3s, 4.5s
+          await delay(RETRY_DELAY_MS * attempt);
+          continue;
+        }
+      }
+      
+      // Not a rate limit error, or max retries reached
+      throw e;
+    }
+  }
+  
+  throw lastError;
+}
 
 export async function handleGetEmails(request, env) {
   const url = new URL(request.url);
@@ -354,7 +391,7 @@ export async function handleSendEmail(id, request, env) {
         const sendId = generateId();
         const renderedHtml = renderEmail(email, subscriber, sendId, baseUrl, email, template);
         
-        const messageId = await sendEmailViaSES(
+        const messageId = await sendEmailWithRetry(
           env, 
           subscriber.email, 
           email.subject, 
@@ -538,7 +575,7 @@ export async function handleCreateAndSendCampaign(request, env) {
     let failed = 0;
     const errors = [];
 
-    // Send to each subscriber with rate limiting
+    // Send to each subscriber with rate limiting and retry
     for (let i = 0; i < subscribers.results.length; i++) {
       const subscriber = subscribers.results[i];
       
@@ -551,7 +588,7 @@ export async function handleCreateAndSendCampaign(request, env) {
         const sendId = generateId();
         const renderedHtml = renderEmail(emailForRender, subscriber, sendId, baseUrl, list, template);
         
-        const messageId = await sendEmailViaSES(
+        const messageId = await sendEmailWithRetry(
           env, 
           subscriber.email, 
           data.subject, 
