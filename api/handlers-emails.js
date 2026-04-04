@@ -1,8 +1,16 @@
 /**
  * Email/Campaign handlers
+ * 
+ * Note: Resend has a rate limit of 5 requests/second. We add 250ms delay between sends.
  */
 
 import { generateId, jsonResponse, isValidEmail, sendEmailViaSES, renderEmail } from './lib.js';
+
+// Helper to add delay for rate limiting
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Rate limit: Resend allows 5 req/sec, so we wait 250ms between sends to be safe
+const SEND_DELAY_MS = 250;
 
 export async function handleGetEmails(request, env) {
   const url = new URL(request.url);
@@ -335,7 +343,14 @@ export async function handleSendEmail(id, request, env) {
     let failed = 0;
     const errors = [];
 
-    for (const subscriber of subscribers.results) {
+    for (let i = 0; i < subscribers.results.length; i++) {
+      const subscriber = subscribers.results[i];
+      
+      // Rate limit: wait 250ms between sends (Resend allows 5/sec)
+      if (i > 0) {
+        await sleep(SEND_DELAY_MS);
+      }
+      
       try {
         const sendId = generateId();
         const renderedHtml = renderEmail(email, subscriber, sendId, baseUrl, email, template);
@@ -524,8 +539,15 @@ export async function handleCreateAndSendCampaign(request, env) {
     let failed = 0;
     const errors = [];
 
-    // Send to each subscriber
-    for (const subscriber of subscribers.results) {
+    // Send to each subscriber with rate limiting
+    for (let i = 0; i < subscribers.results.length; i++) {
+      const subscriber = subscribers.results[i];
+      
+      // Rate limit: wait 250ms between sends (Resend allows 5/sec)
+      if (i > 0) {
+        await sleep(SEND_DELAY_MS);
+      }
+      
       try {
         const sendId = generateId();
         const renderedHtml = renderEmail(emailForRender, subscriber, sendId, baseUrl, list, template);
