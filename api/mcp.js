@@ -1,10 +1,16 @@
 /**
  * Courier MCP Server
  * Exposes email marketing tools directly to Claude via MCP protocol
- * Updated: 2026-03-04 - Fix email sending tools to actually send via Resend
+ * Updated: 2026-04-04 - Add rate limiting for Resend (5 req/sec)
  */
 
 import { generateId, sendEmailViaSES, renderEmail, isValidEmail } from './lib.js';
+
+// Helper to add delay for rate limiting
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Rate limit: Resend allows 5 req/sec, so we wait 250ms between sends to be safe
+const SEND_DELAY_MS = 250;
 
 // Tool definitions
 const TOOLS = [
@@ -30,18 +36,18 @@ const TOOLS = [
   { name: "courier_send_test", description: "Send a test email to a specific address", inputSchema: { type: "object", properties: { campaign_id: { type: "string" }, email: { type: "string" } }, required: ["campaign_id", "email"] } },
   { name: "courier_send_now", description: "Send a campaign immediately to all subscribers", inputSchema: { type: "object", properties: { campaign_id: { type: "string" } }, required: ["campaign_id"] } },
   { name: "courier_list_sequences", description: "List email sequences", inputSchema: { type: "object", properties: { list_id: { type: "string" }, status: { type: "string", enum: ["draft", "active", "paused"] } }, required: [] } },
-  { name: "courier_get_sequence", description: "Get sequence details with steps", inputSchema: { type: "object", properties: { sequence_id: { type: "string" } }, required: ["sequence_id"] } },
+  { name: "courier_get_sequence", description: "Get sequence details with steps. Shows delay and send_at_time for each step.", inputSchema: { type: "object", properties: { sequence_id: { type: "string" } }, required: ["sequence_id"] } },
   { name: "courier_create_sequence", description: "Create a new email sequence", inputSchema: { type: "object", properties: { name: { type: "string" }, list_id: { type: "string" }, description: { type: "string" }, trigger_type: { type: "string", enum: ["subscribe", "manual", "tag"], default: "subscribe" }, trigger_value: { type: "string", description: "For tag triggers, the tag name that triggers this sequence" } }, required: ["name", "list_id"] } },
   { name: "courier_update_sequence", description: "Update a sequence", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, name: { type: "string" }, description: { type: "string" }, status: { type: "string", enum: ["draft", "active", "paused"] }, trigger_type: { type: "string", enum: ["subscribe", "manual", "tag"] }, trigger_value: { type: "string" } }, required: ["sequence_id"] } },
   { name: "courier_delete_sequence", description: "Delete a sequence", inputSchema: { type: "object", properties: { sequence_id: { type: "string" } }, required: ["sequence_id"] } },
-  { name: "courier_add_sequence_step", description: "Add a step to a sequence", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, subject: { type: "string" }, body_html: { type: "string" }, delay_minutes: { type: "number", default: 0, description: "0=immediate, 1440=1 day, 10080=1 week" }, preview_text: { type: "string" }, send_at_time: { type: "string", description: "Specific time to send (HH:MM in 24h format, e.g. '09:00'). Set to null for immediate delivery based on delay_minutes." } }, required: ["sequence_id", "subject", "body_html"] } },
-  { name: "courier_update_sequence_step", description: "Update a sequence step", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, step_id: { type: "string" }, subject: { type: "string" }, body_html: { type: "string" }, delay_minutes: { type: "number" }, preview_text: { type: "string" }, status: { type: "string", enum: ["active", "paused"] }, send_at_time: { type: "string", description: "Specific time to send (HH:MM in 24h format, e.g. '09:00'). Use 'null' or empty string to clear and enable immediate delivery." } }, required: ["sequence_id", "step_id"] } },
+  { name: "courier_add_sequence_step", description: "Add a step to a sequence. Use delay_minutes=0 for immediate delivery when using send_at_time.", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, subject: { type: "string" }, body_html: { type: "string" }, delay_minutes: { type: "number", default: 0, description: "0=immediate, 1440=1 day, 10080=1 week" }, preview_text: { type: "string" }, send_at_time: { type: "string", description: "Specific time to send (HH:MM in 24h format, e.g. '09:00'). Set to null for immediate delivery based on delay_minutes." } }, required: ["sequence_id", "subject", "body_html"] } },
+  { name: "courier_update_sequence_step", description: "Update a sequence step", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, step_id: { type: "string" }, subject: { type: "string" }, body_html: { type: "string" }, delay_minutes: { type: "number" }, preview_text: { type: "string" }, status: { type: "string", enum: ["active", "paused"] }, send_at_time: { type: "string", description: "Specific time to send (HH:MM). Use 'null' or empty string to clear." } }, required: ["sequence_id", "step_id"] } },
   { name: "courier_delete_sequence_step", description: "Delete a sequence step", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, step_id: { type: "string" } }, required: ["sequence_id", "step_id"] } },
   { name: "courier_reorder_sequence_steps", description: "Reorder sequence steps", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, step_ids: { type: "array", items: { type: "string" } } }, required: ["sequence_id", "step_ids"] } },
   { name: "courier_enroll_in_sequence", description: "Enroll an email in a sequence", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, email: { type: "string" } }, required: ["sequence_id", "email"] } },
-  { name: "courier_sequence_enrollments", description: "List sequence enrollments", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, status: { type: "string", enum: ["active", "completed", "cancelled"] }, limit: { type: "number", default: 50 } }, required: ["sequence_id"] } },
-  { name: "courier_list_subscribers", description: "List subscribers for a list", inputSchema: { type: "object", properties: { list_id: { type: "string", description: "List ID or slug" }, limit: { type: "number", default: 50 } }, required: [] } },
-  { name: "courier_add_subscriber", description: "Add a subscriber to a list. Creates the lead if they don't exist. Reactivates if previously unsubscribed.", inputSchema: { type: "object", properties: { list_id: { type: "string", description: "List ID or slug" }, email: { type: "string", description: "Subscriber email address" }, name: { type: "string", description: "Subscriber name (optional)" } }, required: ["list_id", "email"] } },
+  { name: "courier_sequence_enrollments", description: "List sequence enrollments with next_send_at for debugging", inputSchema: { type: "object", properties: { sequence_id: { type: "string" }, status: { type: "string", enum: ["active", "completed", "cancelled"] }, limit: { type: "number", default: 50 } }, required: ["sequence_id"] } },
+  { name: "courier_list_subscribers", description: "List subscribers for a list. Shows email, name, tags, and subscription ID.", inputSchema: { type: "object", properties: { list_id: { type: "string", description: "List ID or slug" }, limit: { type: "number", default: 50 } }, required: [] } },
+  { name: "courier_add_subscriber", description: "Add a subscriber to a list. Creates the lead if they don't exist. Reactivates if previously unsubscribed.", inputSchema: { type: "object", properties: { list_id: { type: "string", description: "List ID or slug" }, email: { type: "string", description: "Subscriber email address" }, name: { type: "string", description: "Subscriber name" } }, required: ["list_id", "email"] } },
   { name: "courier_delete_subscriber", description: "Delete/unsubscribe subscribers", inputSchema: { type: "object", properties: { subscription_id: { type: "string" }, subscription_ids: { type: "array", items: { type: "string" } }, permanent: { type: "boolean", default: false } }, required: [] } },
   { name: "courier_stats", description: "Get overall platform statistics including opens, clicks, unsubscribes, and performance metrics", inputSchema: { type: "object", properties: {}, required: [] } }
 ];
@@ -209,8 +215,15 @@ async function executeTool(name, args, env) {
     }
     case "courier_create_campaign": {
       const id = generateId(); const now = new Date().toISOString();
-      await db.prepare('INSERT INTO emails (id, subject, body_html, list_id, title, preview_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, \'draft\', ?, ?)').bind(id, args.subject, args.body_html, args.list_id || null, args.title || null, args.preview_text || null, now, now).run();
-      return `✅ Campaign created: **${args.subject}**\nID: ${id}\nStatus: draft`;
+      // Resolve list by slug if needed
+      let listId = args.list_id || null;
+      if (listId) {
+        const list = await db.prepare('SELECT id FROM lists WHERE id = ? OR slug = ?').bind(listId, listId).first();
+        listId = list?.id || null;
+      }
+      await db.prepare('INSERT INTO emails (id, subject, body_html, list_id, title, preview_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, \'draft\', ?, ?)').bind(id, args.subject, args.body_html, listId, args.title || null, args.preview_text || null, now, now).run();
+      const listName = listId ? (await db.prepare('SELECT name FROM lists WHERE id = ?').bind(listId).first())?.name : null;
+      return `✅ Campaign created: **${args.subject}**\nID: ${id}\nStatus: draft${listName ? `\nList: ${listName}` : ''}`;
     }
     case "courier_update_campaign": {
       const updates = []; const values = [];
@@ -286,15 +299,12 @@ async function executeTool(name, args, env) {
       return "✅ Schedule cancelled - campaign returned to draft";
     }
     
-    // ==================== FIXED: courier_send_test - Now actually sends via Resend ====================
+    // ==================== courier_send_test - Actually sends via Resend ====================
     case "courier_send_test": {
-      // Validate email
       if (!args.email || !isValidEmail(args.email)) {
         return "⛔ Valid email address required";
       }
       
-      // Get campaign with list info
-      // Bind audit: 1 ?, 1 bind ✅
       const email = await db.prepare(`
         SELECT e.*, l.from_name, l.from_email, l.campaign_template_id 
         FROM emails e 
@@ -304,24 +314,19 @@ async function executeTool(name, args, env) {
       
       if (!email) return "⛔ Campaign not found";
       
-      // Get template if list has one
       let template = null;
       if (email.campaign_template_id) {
-        // Bind audit: 1 ?, 1 bind ✅
         template = await db.prepare('SELECT * FROM templates WHERE id = ?')
           .bind(email.campaign_template_id).first();
       }
       
-      // Create fake subscriber for rendering
       const fakeSubscriber = { name: 'Test User', email: args.email };
       const fakeSendId = 'test-' + generateId();
       const baseUrl = 'https://email-bot-server.micaiah-tasks.workers.dev';
       
-      // Render the email with template
       const renderedHtml = renderEmail(email, fakeSubscriber, fakeSendId, baseUrl, email, template);
       
       try {
-        // Actually send via Resend
         const messageId = await sendEmailViaSES(
           env,
           args.email,
@@ -339,10 +344,8 @@ async function executeTool(name, args, env) {
       }
     }
     
-    // ==================== FIXED: courier_send_now - Now actually sends to all subscribers ====================
+    // ==================== courier_send_now - Sends to all subscribers with rate limiting ====================
     case "courier_send_now": {
-      // Get campaign with list info
-      // Bind audit: 1 ?, 1 bind ✅
       const email = await db.prepare(`
         SELECT e.*, l.from_name, l.from_email, l.campaign_template_id 
         FROM emails e 
@@ -353,18 +356,14 @@ async function executeTool(name, args, env) {
       if (!email) return "⛔ Campaign not found";
       if (email.status === 'sent') return "⛔ Campaign already sent";
       
-      // Get template if list has one
       let template = null;
       if (email.campaign_template_id) {
-        // Bind audit: 1 ?, 1 bind ✅
         template = await db.prepare('SELECT * FROM templates WHERE id = ?')
           .bind(email.campaign_template_id).first();
       }
       
-      // Get subscribers
       let subscribers;
       if (email.list_id) {
-        // Bind audit: 2 ?, 2 binds ✅
         subscribers = await db.prepare(`
           SELECT l.id, l.email, l.name, s.id as subscription_id
           FROM subscriptions s
@@ -372,7 +371,6 @@ async function executeTool(name, args, env) {
           WHERE s.list_id = ? AND s.status = 'active'
         `).bind(email.list_id).all();
       } else {
-        // Send to all non-bounced leads
         subscribers = await db.prepare(`
           SELECT id, email, name FROM leads 
           WHERE unsubscribed_at IS NULL AND (bounce_count IS NULL OR bounce_count < 3)
@@ -380,9 +378,7 @@ async function executeTool(name, args, env) {
       }
       
       if (!subscribers.results || subscribers.results.length === 0) {
-        // Mark as sent with 0 count
         const now = new Date().toISOString();
-        // Bind audit: 4 ?, 4 binds ✅
         await db.prepare(`
           UPDATE emails SET status = 'sent', sent_at = ?, sent_count = 0, updated_at = ? WHERE id = ?
         `).bind(now, now, args.campaign_id).run();
@@ -395,8 +391,15 @@ async function executeTool(name, args, env) {
       let failed = 0;
       const errors = [];
       
-      // Send to each subscriber
-      for (const subscriber of subscribers.results) {
+      // Send to each subscriber WITH RATE LIMITING
+      for (let i = 0; i < subscribers.results.length; i++) {
+        const subscriber = subscribers.results[i];
+        
+        // Rate limit: wait 250ms between sends (Resend allows 5/sec)
+        if (i > 0) {
+          await sleep(SEND_DELAY_MS);
+        }
+        
         try {
           const sendId = generateId();
           const renderedHtml = renderEmail(email, subscriber, sendId, baseUrl, email, template);
@@ -411,8 +414,6 @@ async function executeTool(name, args, env) {
             email.from_email
           );
           
-          // Record the send
-          // Bind audit: 6 ?, 6 binds ✅
           await db.prepare(`
             INSERT INTO email_sends (id, email_id, lead_id, subscription_id, ses_message_id, status, created_at)
             VALUES (?, ?, ?, ?, ?, 'sent', ?)
@@ -426,9 +427,7 @@ async function executeTool(name, args, env) {
         }
       }
       
-      // Update campaign status
       const now = new Date().toISOString();
-      // Bind audit: 4 ?, 4 binds ✅
       await db.prepare(`
         UPDATE emails SET status = 'sent', sent_at = ?, sent_count = ?, updated_at = ? WHERE id = ?
       `).bind(now, sent, now, args.campaign_id).run();
@@ -504,7 +503,6 @@ async function executeTool(name, args, env) {
       updates.push('updated_at = ?'); values.push(new Date().toISOString()); values.push(args.sequence_id);
       await db.prepare(`UPDATE sequences SET ${updates.join(', ')} WHERE id = ?`).bind(...values).run();
 
-      // When activating a subscribe-triggered sequence, link it as the list's welcome_sequence_id
       if (args.status === 'active') {
         try {
           const seq = await db.prepare(
@@ -594,23 +592,28 @@ async function executeTool(name, args, env) {
       let out = `👥 **Sequence Enrollments** (${results.results.length})\n\n`;
       for (const e of results.results) {
         const icon = e.status === 'active' ? '🟢' : e.status === 'completed' ? '✅' : '❌';
-        out += `${icon} ${e.name || '(no name)'} <${e.email}>\n   Step: ${e.current_step} | Enrolled: ${e.enrolled_at?.split('T')[0]}\n`;
+        out += `${icon} ${e.name || '(no name)'} <${e.email}>\n   Step: ${e.current_step} | Enrolled: ${e.enrolled_at?.split('T')[0]}`;
+        if (e.next_send_at) out += ` | Next: ${e.next_send_at}`;
+        out += `\n`;
       }
       return out;
     }
     
-    // ==================== FIXED: courier_list_subscribers - Now resolves slug to UUID ====================
     case "courier_list_subscribers": {
       let query, params;
       if (args.list_id) {
-        // First resolve the list by ID or slug
-        // Bind audit: 2 ?, 2 binds ✅
         const list = await db.prepare('SELECT id, name FROM lists WHERE id = ? OR slug = ?')
           .bind(args.list_id, args.list_id).first();
         if (!list) return "⛔ List not found";
         
-        // Bind audit: 2 ?, 2 binds ✅
-        query = "SELECT s.id as subscription_id, s.subscribed_at, l.email, l.name FROM subscriptions s JOIN leads l ON s.lead_id = l.id WHERE s.list_id = ? AND s.status = 'active' ORDER BY s.subscribed_at DESC LIMIT ?";
+        // Get subscribers with their tags
+        query = `
+          SELECT s.id as subscription_id, s.subscribed_at, l.email, l.name, l.id as lead_id
+          FROM subscriptions s 
+          JOIN leads l ON s.lead_id = l.id 
+          WHERE s.list_id = ? AND s.status = 'active' 
+          ORDER BY s.subscribed_at DESC LIMIT ?
+        `;
         params = [list.id, args.limit || 50];
       } else {
         query = 'SELECT l.id, l.email, l.name, l.created_at FROM leads l ORDER BY l.created_at DESC LIMIT ?';
@@ -618,20 +621,30 @@ async function executeTool(name, args, env) {
       }
       const results = await db.prepare(query).bind(...params).all();
       if (!results.results?.length) return "📭 No subscribers found";
+      
+      // Fetch tags for each subscriber
       let out = `👥 **Subscribers** (${results.results.length})\n\n`;
-      for (const s of results.results.slice(0, 30)) out += `• ${s.name || '(no name)'} <${s.email}>\n  ID: ${s.subscription_id || s.id}\n`;
+      for (const s of results.results.slice(0, 30)) {
+        const leadId = s.lead_id || s.id;
+        let tags = [];
+        try {
+          const tagResults = await db.prepare('SELECT tag FROM lead_tags WHERE lead_id = ?').bind(leadId).all();
+          tags = tagResults.results?.map(t => t.tag) || [];
+        } catch (e) {}
+        
+        out += `• ${s.name || '(no name)'} <${s.email}>\n`;
+        if (tags.length > 0) out += `  Tags: ${tags.join(', ')}\n`;
+        out += `  ID: ${s.subscription_id || s.id}\n`;
+      }
       if (results.results.length > 30) out += `\n... and ${results.results.length - 30} more`;
       return out;
     }
     
     case "courier_add_subscriber": {
-      // Validate email
       if (!args.email || !isValidEmail(args.email)) {
         return "⛔ Valid email address required";
       }
       
-      // Find list by ID or slug
-      // Bind audit: 2 ?, 2 binds ✅
       let list = await db.prepare('SELECT * FROM lists WHERE id = ? OR slug = ?')
         .bind(args.list_id, args.list_id).first();
       if (!list) {
@@ -641,15 +654,11 @@ async function executeTool(name, args, env) {
       const email = args.email.toLowerCase().trim();
       const now = new Date().toISOString();
       
-      // Check if lead exists
-      // Bind audit: 1 ?, 1 bind ✅
       let lead = await db.prepare('SELECT * FROM leads WHERE email = ?')
         .bind(email).first();
       let leadId;
       
       if (!lead) {
-        // Create new lead
-        // Bind audit: 5 ?, 5 binds ✅
         const result = await db.prepare(`
           INSERT INTO leads (email, name, source, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -659,8 +668,6 @@ async function executeTool(name, args, env) {
         leadId = lead.id;
       }
       
-      // Check for existing subscription
-      // Bind audit: 2 ?, 2 binds ✅
       const existingSub = await db.prepare(
         'SELECT * FROM subscriptions WHERE lead_id = ? AND list_id = ?'
       ).bind(leadId, list.id).first();
@@ -669,17 +676,13 @@ async function executeTool(name, args, env) {
         if (existingSub.status === 'active') {
           return `⚠️ **${email}** is already subscribed to **${list.name}**`;
         }
-        // Reactivate
-        // Bind audit: 2 ?, 2 binds ✅
         await db.prepare(`
           UPDATE subscriptions SET status = 'active', unsubscribed_at = NULL, subscribed_at = ? WHERE id = ?
         `).bind(now, existingSub.id).run();
         return `✅ Reactivated **${email}** on **${list.name}**\nSubscription ID: ${existingSub.id}`;
       }
       
-      // Create new subscription
       const subId = generateId();
-      // Bind audit: 6 ?, 6 binds ✅
       await db.prepare(`
         INSERT INTO subscriptions (id, lead_id, list_id, status, source, subscribed_at, created_at)
         VALUES (?, ?, ?, 'active', 'manual', ?, ?)
