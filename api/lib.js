@@ -1,6 +1,6 @@
 /**
  * Shared utilities for Email Platform
- * Last updated: 2026-02-03 20:45 UTC - Force fresh deploy
+ * Last updated: 2026-04-08 - Fix template wrapping for complete HTML emails
  */
 
 // ==================== CONSTANTS ====================
@@ -143,6 +143,16 @@ function applyMergeTags(html, subscriber) {
     .replace(/\{email\}/g, email);
 }
 
+/**
+ * Check if HTML content is a complete HTML document (has doctype or html tag)
+ * These should not be wrapped in a template as it would create nested HTML docs
+ */
+function isCompleteHtmlDocument(html) {
+  if (!html) return false;
+  const trimmed = html.trim().toLowerCase();
+  return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
+}
+
 export function renderEmail(email, subscriber, sendId, baseUrl, list, template) {
   let contentHtml = email.body_html;
   contentHtml = applyMergeTags(contentHtml, subscriber);
@@ -153,7 +163,12 @@ export function renderEmail(email, subscriber, sendId, baseUrl, list, template) 
   
   let fullHtml;
   
-  if (template && template.body_html) {
+  // Check if content is already a complete HTML document
+  // If so, skip template wrapping to avoid nested HTML documents
+  const contentIsCompleteHtml = isCompleteHtmlDocument(contentHtml);
+  
+  if (template && template.body_html && !contentIsCompleteHtml) {
+    // Use template - content is a fragment that should be wrapped
     fullHtml = template.body_html;
     fullHtml = fullHtml.replace(/\{content\}/g, contentHtml);
     fullHtml = applyMergeTags(fullHtml, subscriber);
@@ -163,7 +178,21 @@ export function renderEmail(email, subscriber, sendId, baseUrl, list, template) 
     if (fullHtml.indexOf('/t/open?sid=') === -1) {
       fullHtml = fullHtml.replace('</body>', trackingPixel + '</body>');
     }
+  } else if (contentIsCompleteHtml) {
+    // Content is already a complete HTML document (e.g., from UP Blog)
+    // Just add tracking pixel and replace unsubscribe placeholder if present
+    fullHtml = contentHtml;
+    
+    // Replace unsubscribe URL placeholder (UP Blog uses {{{unsubscribe_url}}})
+    fullHtml = fullHtml.replace(/\{\{\{unsubscribe_url\}\}\}/g, unsubscribeUrl);
+    fullHtml = fullHtml.replace(/\{unsubscribe_url\}/g, unsubscribeUrl);
+    
+    // Add tracking pixel if not already present
+    if (fullHtml.indexOf('/t/open?sid=') === -1) {
+      fullHtml = fullHtml.replace('</body>', trackingPixel + '</body>');
+    }
   } else {
+    // No template and content is a fragment - wrap in basic HTML structure
     fullHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>' + email.subject + '</title></head><body style="font-family: Georgia, serif; max-width: 600px; margin: 0 auto; padding: 20px; line-height: 1.6;">' + contentHtml + '<hr style="margin-top: 40px; border: none; border-top: 1px solid #ddd;"><p style="font-size: 12px; color: #666; text-align: center;">You are receiving this because you signed up for ' + fromName + '.<br><a href="' + unsubscribeUrl + '" style="color: #666;">Unsubscribe</a></p>' + trackingPixel + '</body></html>';
   }
   
